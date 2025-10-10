@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seqroom</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+        background: radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.15), rgba(15, 23, 42, 1) 65%);
+        color: #f8fafc;
+      }
+
+      main.app-shell {
+        width: min(1100px, 100% - 32px);
+        margin: 32px auto 48px;
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+
+      .app-header {
+        text-align: center;
+      }
+
+      .app-header h1 {
+        margin: 0;
+        font-size: clamp(2rem, 4vw, 3.5rem);
+        letter-spacing: 0.35em;
+        font-weight: 700;
+      }
+
+      .panel,
+      .sequencer-shell {
+        padding: 28px 32px;
+        border-radius: 24px;
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        box-shadow: 0 32px 60px rgba(15, 23, 42, 0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .panel {
+        align-items: center;
+        text-align: center;
+      }
+
+      .panel p {
+        margin: 0;
+        max-width: 420px;
+        line-height: 1.5;
+        color: rgba(226, 232, 240, 0.9);
+      }
+
+      .landing-actions {
+        display: flex;
+        gap: 16px;
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      button {
+        appearance: none;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 26px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+      }
+
+      button.primary {
+        background: linear-gradient(135deg, #38bdf8, #818cf8);
+        color: #0f172a;
+        box-shadow: 0 14px 30px rgba(56, 189, 248, 0.35);
+      }
+
+      button.subtle,
+      .transport-button {
+        background: rgba(148, 163, 184, 0.2);
+        color: #e2e8f0;
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.35);
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        filter: none;
+      }
+
+      .room-code {
+        margin: 0;
+        padding: 10px 18px;
+        border-radius: 18px;
+        background: rgba(56, 189, 248, 0.18);
+        color: #f0f9ff;
+        letter-spacing: 0.22em;
+        font-weight: 600;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .sequencer-shell {
+        gap: 20px;
+      }
+
+      .transport-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .transport-primary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .transport-button {
+        padding: 14px 34px;
+        font-size: 1.05rem;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+      }
+
+      .transport-button.playing {
+        background: linear-gradient(135deg, #f87171, #fb7185);
+        color: #0f172a;
+        box-shadow: 0 14px 30px rgba(248, 113, 113, 0.35);
+      }
+
+      .bpm-group {
+        flex: 1 1 400px;
+        min-width: 260px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 22px;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+      }
+
+      .bpm-group label {
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: rgba(226, 232, 240, 0.85);
+        white-space: nowrap;
+      }
+
+      .bpm-group input[type='range'] {
+        flex: 1 1 auto;
+        accent-color: #38bdf8;
+      }
+
+      .bpm-group input[type='number'] {
+        width: 82px;
+        padding: 6px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.65);
+        color: #f8fafc;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+        appearance: textfield;
+        -moz-appearance: textfield;
+      }
+
+      .bpm-group input[type='number']::-webkit-outer-spin-button,
+      .bpm-group input[type='number']::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+
+      .bpm-group input[type='number']:focus {
+        outline: none;
+        border-color: rgba(56, 189, 248, 0.8);
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+      }
+
+      .bpm-group span {
+        min-width: 96px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+
+      .transport-status {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px 22px;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        flex-wrap: wrap;
+      }
+
+      .transport-status-left {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1 1 auto;
+        min-width: 200px;
+      }
+
+      .transport-status-left span {
+        font-size: 0.92rem;
+        color: rgba(226, 232, 240, 0.92);
+      }
+
+      .transport-status-meta {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        font-size: 0.82rem;
+        letter-spacing: 0.02em;
+        color: rgba(148, 163, 184, 0.9);
+      }
+
+      .transport-status-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .instrument-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 4px 0;
+      }
+
+      .instrument-toolbar h2 {
+        margin: 0;
+        font-size: 1.1rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(226, 232, 240, 0.9);
+      }
+
+      .instrument-list {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .synth-card {
+        position: relative;
+        padding: 20px;
+        border-radius: 20px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.28);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        animation: synth-pop 240ms ease both;
+        width: 100%;
+      }
+
+      .synth-card.tone-acid {
+        border-color: rgba(56, 189, 248, 0.4);
+      }
+
+      .synth-card.tone-808 {
+        border-color: rgba(253, 186, 116, 0.4);
+      }
+
+      .synth-card.tone-poly {
+        border-color: rgba(129, 140, 248, 0.4);
+      }
+
+      @keyframes synth-pop {
+        from {
+          transform: translateY(12px) scale(0.96);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0) scale(1);
+          opacity: 1;
+        }
+      }
+
+      .synth-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .synth-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .synth-meta h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        letter-spacing: 0.08em;
+      }
+
+      .synth-meta span {
+        font-size: 0.8rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.8);
+      }
+
+      .synth-params {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+      }
+
+      .param-control {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+      }
+
+      .param-control label {
+        font-size: 0.75rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(203, 213, 225, 0.9);
+      }
+
+      .param-control input[type='range'],
+      .param-control select {
+        width: 100%;
+      }
+
+      .param-control input[type='range'] {
+        accent-color: #38bdf8;
+      }
+
+      .param-control select {
+        padding: 6px 8px;
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(15, 23, 42, 0.6);
+        color: inherit;
+      }
+
+      .param-value-badge {
+        font-size: 0.75rem;
+        opacity: 0.75;
+        text-align: right;
+        letter-spacing: 0.05em;
+      }
+
+      .drum-param-group {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .param-control.range-animated input[type='range'] {
+        transition: transform 120ms ease;
+      }
+
+      .param-control.range-animated input[type='range']:active {
+        transform: scale(1.05);
+      }
+
+      .param-control.param-updated {
+        animation: param-pulse 0.32s ease;
+      }
+
+      @keyframes param-pulse {
+        0% {
+          box-shadow: 0 0 0 rgba(56, 189, 248, 0);
+        }
+        50% {
+          box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+        }
+        100% {
+          box-shadow: 0 0 0 rgba(56, 189, 248, 0);
+        }
+      }
+
+      .drum-selector {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 4px;
+      }
+
+      .drum-button {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 2px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.55);
+        color: rgba(226, 232, 240, 0.9);
+        font-size: 0.8rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+        position: relative;
+      }
+
+      .drum-button:hover {
+        transform: translateY(-1px);
+      }
+
+      .drum-button.active {
+        border-color: var(--drum-color, #38bdf8);
+        box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+        transform: translateY(-1px);
+      }
+
+      .drum-shortcut {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        background: rgba(148, 163, 184, 0.2);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.65rem;
+        letter-spacing: 0.05em;
+        color: rgba(226, 232, 240, 0.75);
+      }
+
+      .step-grid {
+        display: grid;
+        grid-template-columns: repeat(16, minmax(48px, 64px));
+        grid-template-rows: auto;
+        gap: 12px;
+        padding-top: 6px;
+        justify-content: center;
+        grid-auto-flow: row;
+      }
+
+      .step-cell {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 8px;
+        border-radius: 14px;
+        border: 2px solid rgba(248, 250, 252, 0.12);
+        background: rgba(15, 23, 42, 0.55);
+        transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+        min-width: 48px;
+      }
+
+      .step-cell.active {
+        background: #38bdf8;
+        color: #0f172a;
+        border-color: #e0f2fe;
+      }
+
+      .step-cell.active .step-index {
+        color: rgba(15, 23, 42, 0.65);
+      }
+
+      .step-cell.playing {
+        border-color: #facc15;
+        box-shadow: 0 0 14px rgba(250, 204, 21, 0.45);
+      }
+
+      .step-toggle {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        background: transparent;
+        border: none;
+        color: inherit;
+        cursor: pointer;
+        padding: 0;
+        transition: transform 120ms ease;
+      }
+
+      .step-toggle:hover {
+        transform: translateY(-2px);
+      }
+
+      .drum-step-toggle {
+        gap: 6px;
+      }
+
+      .step-toggle.active .step-note {
+        color: #0f172a;
+      }
+
+      .step-note {
+        font-size: 0.82rem;
+        letter-spacing: 0.05em;
+      }
+
+      .step-index {
+        font-size: 0.7rem;
+        letter-spacing: 0.18em;
+        opacity: 0.7;
+      }
+
+      .step-pitch-select {
+        width: 100%;
+        padding: 4px 6px;
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: rgba(15, 23, 42, 0.7);
+        color: inherit;
+        font-size: 0.75rem;
+        letter-spacing: 0.03em;
+        appearance: none;
+        -moz-appearance: none;
+      }
+
+      .step-cell.active .step-pitch-select {
+        background: rgba(14, 116, 144, 0.18);
+        border-color: rgba(14, 116, 144, 0.35);
+      }
+
+      .drum-indicator {
+        display: block;
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.3);
+        transition: background 140ms ease, box-shadow 140ms ease;
+      }
+
+      .drum-indicator.active {
+        background: var(--drum-color, #38bdf8);
+        box-shadow: 0 0 8px 0 var(--drum-color, #38bdf8);
+      }
+
+      .drum-cell.drum-active {
+        border-color: var(--drum-color, #38bdf8);
+        box-shadow: 0 0 12px 0 var(--drum-color, #38bdf8);
+        background: rgba(15, 23, 42, 0.6);
+        color: rgba(226, 232, 240, 0.95);
+      }
+
+      .instrument-empty {
+        padding: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px dashed rgba(148, 163, 184, 0.4);
+        border-radius: 18px;
+        color: rgba(148, 163, 184, 0.8);
+        font-size: 0.95rem;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 15, 28, 0.65);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        backdrop-filter: blur(6px);
+        animation: fade-in 180ms ease forwards;
+      }
+
+      @keyframes fade-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      .modal-panel {
+        width: min(520px, 92vw);
+        background: rgba(15, 23, 42, 0.92);
+        border-radius: 24px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        box-shadow: 0 28px 60px rgba(10, 15, 28, 0.45);
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .modal-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 16px;
+      }
+
+      .synth-option {
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid rgba(56, 189, 248, 0.18);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        cursor: pointer;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      .synth-option:hover {
+        transform: translateY(-3px);
+        border-color: rgba(56, 189, 248, 0.42);
+        background: rgba(15, 23, 42, 0.7);
+      }
+
+      .synth-option h4 {
+        margin: 0;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .synth-option span {
+        font-size: 0.8rem;
+        color: rgba(148, 163, 184, 0.85);
+      }
+
+      @media (max-width: 920px) {
+        .instrument-list {
+          gap: 16px;
+        }
+      }
+
+      @media (max-width: 720px) {
+        main.app-shell {
+          margin: 24px auto 40px;
+          gap: 24px;
+        }
+
+        .panel,
+        .sequencer-shell {
+          padding: 22px 20px;
+          border-radius: 20px;
+        }
+
+        .transport-primary {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .bpm-group {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .bpm-group span,
+        .bpm-group input[type='number'] {
+          text-align: left;
+        }
+
+        .transport-status {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .transport-status-right {
+          justify-content: space-between;
+        }
+
+      }
+
+      @media (max-width: 720px) and (orientation: portrait) {
+        .step-grid {
+          grid-template-columns: repeat(8, minmax(32px, 1fr));
+          grid-template-rows: repeat(2, auto);
+          grid-auto-flow: row;
+          gap: 8px;
+        }
+
+        .step-cell {
+          min-width: 32px;
+          padding: 8px 6px;
+        }
+      }
+
+      @media (max-width: 900px) and (orientation: landscape) {
+        .step-grid {
+          grid-template-columns: repeat(8, minmax(32px, 1fr));
+          grid-template-rows: repeat(2, auto);
+          grid-auto-flow: row;
+          gap: 8px;
+        }
+
+        .step-cell {
+          min-width: 32px;
+          padding: 8px 6px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <h1>SEQROOM</h1>
+      </header>
+
+      <section id="landing" class="panel">
+        <p>Start a room or join an existing code to play a synced multi-synth groove with friends.</p>
+        <p id="room-code-display" class="room-code hidden"></p>
+        <div class="landing-actions">
+          <button id="create-room" class="primary">Create Room</button>
+          <button id="join-room" class="subtle">Join Room</button>
+        </div>
+      </section>
+
+      <section id="sequencer" class="sequencer-shell hidden">
+        <section class="transport-panel">
+          <div class="transport-primary">
+            <button id="transport-toggle" class="transport-button">Play</button>
+            <div class="bpm-group">
+              <label for="tempo">Tempo</label>
+              <input id="tempo" type="range" min="30" max="300" step="1" value="120" />
+              <input
+                id="tempo-input"
+                type="number"
+                min="30"
+                max="300"
+                step="1"
+                value="120"
+                autocomplete="off"
+                inputmode="numeric"
+                aria-label="Tempo BPM"
+              />
+              <span id="tempo-value">120 BPM</span>
+            </div>
+          </div>
+
+          <div class="transport-status">
+            <div class="transport-status-left">
+              <span id="room-display">Room: —</span>
+              <div class="transport-status-meta">
+                <span id="sync-status">Syncing clock…</span>
+              </div>
+            </div>
+            <div class="transport-status-right">
+              <span id="connections">0 people connected</span>
+              <button id="leave-room" class="subtle">Leave</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="instrument-toolbar">
+          <h2>Instruments</h2>
+          <button id="add-synth" class="primary">Add Synth</button>
+        </section>
+
+        <section id="instrument-list" class="instrument-list"></section>
+        <div id="instrument-empty" class="instrument-empty hidden">
+          No instruments yet. Add your first synth to start sequencing.
+        </div>
+      </section>
+    </main>
+
+    <div id="add-synth-modal" class="hidden">
+      <div class="modal-backdrop">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h3>Select a Synth</h3>
+            <button id="close-synth-modal" class="subtle">Close</button>
+          </div>
+          <div class="modal-grid">
+            <div class="synth-option" data-synth-type="tb-303">
+              <h4>Acid Bass</h4>
+              <span>Roland TB-303 inspired bassline synth with resonant filter sweeps.</span>
+            </div>
+            <div class="synth-option" data-synth-type="tr-808">
+              <h4>808 Drums</h4>
+              <span>Classic TR-808 kit for kicks, snares, and hats.</span>
+            </div>
+            <div class="synth-option" data-synth-type="poly-synth">
+              <h4>Poly Synth</h4>
+              <span>Versatile polyphonic synth with filter and envelope control.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <template id="instrument-card-template">
+      <article class="synth-card" data-instrument-id="">
+        <header class="synth-header">
+          <div class="synth-meta">
+            <h3>Instrument</h3>
+            <span>Type</span>
+          </div>
+          <button class="subtle remove-instrument" type="button">Remove</button>
+        </header>
+        <section class="synth-params"></section>
+        <section class="step-grid"></section>
+      </article>
+    </template>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+  </body>
+</html>

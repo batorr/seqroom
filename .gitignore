@@ -1,0 +1,7 @@
+# Node modules - ne töltsd fel, mindenki magának telepíti
+node_modules/
+
+# macOS automatikusan létrehozott szemétfájl
+.DS_Store
+
+.env
