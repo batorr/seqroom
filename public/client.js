@@ -128,6 +128,7 @@ const audioState = {
   masterGain: null,
   schedulerId: null,
   nextStepIndex: 0,
+  lastStepDurationMs: null,
 };
 
 const AUDIO_LOOKAHEAD_MS = 25;
@@ -609,11 +610,12 @@ function renderParamControls(container, instrument, definition) {
       input.min = String(paramDef.min);
       input.max = String(paramDef.max);
       input.step = String(paramDef.step ?? 0.01);
-      input.value = String(clampValue(instrument.params[paramDef.key], paramDef.min, paramDef.max));
+      const initialValue = resolveInstrumentParamValue(instrument, paramDef);
+      input.value = String(initialValue);
       input.id = `${instrument.id}-${paramDef.key}`;
 
       const valueBadge = document.createElement('span');
-      valueBadge.textContent = formatParamDisplay(input.value, paramDef);
+      valueBadge.textContent = formatParamDisplay(initialValue, paramDef);
       valueBadge.style.fontSize = '0.75rem';
       valueBadge.style.opacity = '0.8';
 
@@ -622,10 +624,26 @@ function renderParamControls(container, instrument, definition) {
       });
 
       input.addEventListener('change', () => {
-        const numericValue = Number(input.value);
+        let numericValue = Number(input.value);
+        if (!Number.isFinite(numericValue)) {
+          const resetValue = resolveInstrumentParamValue(instrument, paramDef);
+          input.value = String(resetValue);
+          valueBadge.textContent = formatParamDisplay(resetValue, paramDef);
+          return;
+        }
+
+        numericValue = clampValue(numericValue, paramDef.min, paramDef.max);
+        input.value = String(numericValue);
+        valueBadge.textContent = formatParamDisplay(numericValue, paramDef);
+
+        const paramsPayload = createInstrumentParamUpdate(instrument, paramDef, numericValue);
+        if (!paramsPayload) {
+          return;
+        }
+
         socket.emit('instrument:param', {
           instrumentId: instrument.id,
-          params: { [paramDef.key]: numericValue },
+          params: paramsPayload,
         });
       });
 
@@ -652,6 +670,32 @@ function renderParamControls(container, instrument, definition) {
 
     container.appendChild(control);
   });
+}
+
+function resolveInstrumentParamValue(instrument, paramDef) {
+  const params = instrument.params || {};
+  let rawValue = params[paramDef.key];
+
+  if (instrument.type === SynthTypes.TR808 && paramDef.key === 'tone') {
+    rawValue = params.hatTone ?? params.tone ?? params?.hat?.tone ?? rawValue;
+  }
+
+  return clampValue(rawValue, paramDef.min, paramDef.max);
+}
+
+function createInstrumentParamUpdate(instrument, paramDef, value) {
+  if (instrument.type === SynthTypes.TR808 && paramDef.key === 'tone') {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    return { hat: { tone: value }, tone: value };
+  }
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return { [paramDef.key]: value };
 }
 
 function renderStepGrid(container, instrument) {
@@ -1068,12 +1112,21 @@ function syncAudioScheduler() {
     return;
   }
 
+  const previousStepDuration = audioState.lastStepDurationMs;
+  audioState.lastStepDurationMs = stepDurationMs;
+  const tempoSlowed = Number.isFinite(previousStepDuration) && stepDurationMs > previousStepDuration;
+
   const elapsed = getServerSyncedTime() - state.transport.sessionStartTime;
   const currentStep = elapsed >= 0 ? Math.floor(elapsed / stepDurationMs) : -1;
-  if (currentStep >= 0) {
-    audioState.nextStepIndex = Math.max(currentStep, audioState.nextStepIndex || 0);
+  const targetNextIndex = currentStep >= 0 ? currentStep + 1 : 0;
+  const currentNextIndex = Number.isFinite(audioState.nextStepIndex) ? audioState.nextStepIndex : 0;
+
+  if (tempoSlowed && targetNextIndex < currentNextIndex) {
+    audioState.nextStepIndex = targetNextIndex;
+  } else if (targetNextIndex > currentNextIndex) {
+    audioState.nextStepIndex = targetNextIndex;
   } else {
-    audioState.nextStepIndex = Math.max(audioState.nextStepIndex || 0, 0);
+    audioState.nextStepIndex = Math.max(currentNextIndex, 0);
   }
 
   updatePlaybackIndicators(currentStep);
@@ -1081,6 +1134,8 @@ function syncAudioScheduler() {
   if (!audioState.schedulerId) {
     audioState.schedulerId = setInterval(runAudioScheduler, AUDIO_LOOKAHEAD_MS);
   }
+
+  runAudioScheduler();
 }
 
 function stopAudioScheduler() {
@@ -1089,6 +1144,7 @@ function stopAudioScheduler() {
     audioState.schedulerId = null;
   }
   audioState.nextStepIndex = 0;
+  audioState.lastStepDurationMs = null;
   updatePlaybackIndicators(-1);
 }
 
