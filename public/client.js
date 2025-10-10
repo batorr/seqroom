@@ -101,6 +101,7 @@ const createRoomBtn = document.getElementById('create-room');
 const joinRoomBtn = document.getElementById('join-room');
 const leaveRoomBtn = document.getElementById('leave-room');
 const transportToggleBtn = document.getElementById('transport-toggle');
+const recordToggleBtn = document.getElementById('record-toggle');
 const addSynthBtn = document.getElementById('add-synth');
 const roomDisplayEl = document.getElementById('room-display');
 const syncStatusEl = document.getElementById('sync-status');
@@ -129,6 +130,12 @@ const audioState = {
   schedulerId: null,
   nextStepIndex: 0,
   lastStepDurationMs: null,
+  isRecording: false,
+  recordingNode: null,
+  recordingBuffers: [],
+  recordingSampleRate: null,
+  recordingChannelCount: 0,
+  recordingModuleLoaded: false,
 };
 
 const AUDIO_LOOKAHEAD_MS = 25;
@@ -139,6 +146,7 @@ initialize();
 function initialize() {
   setupTempoControls();
   setupTransportControls();
+  setupRecordingControls();
   setupRoomControls();
   setupSynthModal();
   primeAudioUnlock();
@@ -233,6 +241,29 @@ function setupTransportControls() {
 
     openSynthModal();
   });
+}
+
+function setupRecordingControls() {
+  if (!recordToggleBtn) {
+    return;
+  }
+
+  if (!isRecordingSupported()) {
+    recordToggleBtn.disabled = true;
+    recordToggleBtn.title = 'Recording is not supported in this browser.';
+    return;
+  }
+
+  recordToggleBtn.addEventListener('click', () => {
+    toggleRecording().catch((error) => {
+      console.error('Failed to toggle recording:', error);
+      audioState.isRecording = false;
+      updateRecordButton(false);
+      window.alert('Unable to control recording. Check the console for details.');
+    });
+  });
+
+  updateRecordButton(false);
 }
 
 function setupSynthModal() {
@@ -435,11 +466,29 @@ function renderTransport() {
   transportToggleBtn.textContent = state.transport.playing ? 'Stop' : 'Play';
   transportToggleBtn.classList.toggle('playing', state.transport.playing);
   transportToggleBtn.disabled = !state.isInRoom;
+  updateRecordButton(audioState.isRecording);
   if (state.transport.playing) {
     updatePlaybackIndicators(getCurrentStepIndex());
   } else {
     updatePlaybackIndicators(-1);
   }
+}
+
+function updateRecordButton(isRecording) {
+  if (!recordToggleBtn) {
+    return;
+  }
+
+  recordToggleBtn.classList.toggle('recording', Boolean(isRecording));
+  recordToggleBtn.textContent = Boolean(isRecording) ? '● REC' : 'REC';
+  if (typeof recordToggleBtn.disabled === 'boolean') {
+    recordToggleBtn.disabled = !isRecordingSupported();
+  }
+}
+
+function isRecordingSupported() {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  return typeof window.AudioWorkletNode === 'function' && typeof AudioContextCtor === 'function';
 }
 
 function updateTempoDisplay(value) {
@@ -983,6 +1032,10 @@ function leaveRoom() {
     return;
   }
 
+  if (audioState.isRecording) {
+    stopRecording({ download: false });
+  }
+
   socket.emit('room:leave', {}, () => {});
   state.isInRoom = false;
   state.roomId = null;
@@ -1003,6 +1056,9 @@ function leaveRoom() {
 socket.on('disconnect', () => {
   if (!state.isInRoom) {
     return;
+  }
+  if (audioState.isRecording) {
+    stopRecording({ download: false });
   }
   state.isInRoom = false;
   state.roomId = null;
@@ -1094,6 +1150,236 @@ function ensureAudioContext() {
     console.error('Failed to initialize audio context:', error);
     return null;
   }
+}
+
+async function toggleRecording() {
+  if (audioState.isRecording) {
+    stopRecording();
+    return;
+  }
+  await startRecording();
+}
+
+async function startRecording() {
+  if (audioState.isRecording) {
+    return;
+  }
+
+  if (!isRecordingSupported()) {
+    window.alert('Recording is not supported in this browser.');
+    return;
+  }
+
+  const ctx = ensureAudioContext();
+  if (!ctx || !audioState.masterGain) {
+    window.alert('Audio engine is not ready yet.');
+    return;
+  }
+
+  try {
+    await ensureRecordingWorklet(ctx);
+  } catch (error) {
+    console.error('Failed to load recording module:', error);
+    window.alert('Unable to initialize recording.');
+    return;
+  }
+
+  audioState.recordingBuffers = [];
+  audioState.recordingChannelCount = 0;
+  audioState.recordingSampleRate = ctx.sampleRate;
+
+  let recorderNode;
+  const channelCount = ctx.destination?.channelCount || 2;
+
+  try {
+    recorderNode = new AudioWorkletNode(ctx, 'seqroom-recorder', {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers',
+    });
+  } catch (error) {
+    console.error('Failed to create recording node:', error);
+    window.alert('Unable to start recording.');
+    return;
+  }
+
+  recorderNode.port.onmessage = handleRecordingMessage;
+  recorderNode.port.onmessageerror = (event) => {
+    console.error('Recording port error:', event);
+  };
+  recorderNode.onprocessorerror = (error) => {
+    console.error('Recording processor error:', error);
+    stopRecording();
+  };
+
+  try {
+    audioState.masterGain.connect(recorderNode);
+  } catch (error) {
+    console.error('Failed to connect recording node:', error);
+    recorderNode.port.onmessage = null;
+    recorderNode.port.onmessageerror = null;
+    recorderNode.onprocessorerror = null;
+    window.alert('Unable to start recording.');
+    return;
+  }
+
+  audioState.recordingNode = recorderNode;
+  audioState.isRecording = true;
+  updateRecordButton(true);
+}
+
+function stopRecording(options = {}) {
+  const { download = true } = options;
+  const recorderNode = audioState.recordingNode;
+  const wasRecording = audioState.isRecording;
+
+  if (recorderNode) {
+    try {
+      audioState.masterGain?.disconnect(recorderNode);
+    } catch (error) {
+      console.warn('Failed to disconnect recording node:', error);
+    }
+    recorderNode.port.onmessage = null;
+    recorderNode.port.onmessageerror = null;
+    recorderNode.onprocessorerror = null;
+  }
+
+  audioState.recordingNode = null;
+  audioState.isRecording = false;
+  updateRecordButton(false);
+
+  if (!wasRecording) {
+    audioState.recordingBuffers = [];
+    audioState.recordingChannelCount = 0;
+    audioState.recordingSampleRate = null;
+    return;
+  }
+
+  if (!download) {
+    audioState.recordingBuffers = [];
+    audioState.recordingChannelCount = 0;
+    audioState.recordingSampleRate = null;
+    return;
+  }
+
+  const buffers = audioState.recordingBuffers;
+  const channelCount = Math.max(1, audioState.recordingChannelCount || 1);
+  const sampleRate = audioState.recordingSampleRate || audioState.context?.sampleRate || 44100;
+  audioState.recordingBuffers = [];
+  audioState.recordingChannelCount = 0;
+  audioState.recordingSampleRate = null;
+
+  if (!buffers.length) {
+    return;
+  }
+
+  const interleaved = mergeRecordingChunks(buffers);
+  const wavBuffer = encodeWavFromInterleaved(interleaved, channelCount, sampleRate);
+  const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+  downloadBlob(wavBlob, createRecordingFilename('wav'));
+}
+
+async function ensureRecordingWorklet(ctx) {
+  if (audioState.recordingModuleLoaded) {
+    return;
+  }
+  if (!ctx.audioWorklet) {
+    throw new Error('AudioWorklet not available on this AudioContext.');
+  }
+  await ctx.audioWorklet.addModule('recording-processor.js');
+  audioState.recordingModuleLoaded = true;
+}
+
+function handleRecordingMessage(event) {
+  const message = event.data;
+  if (!message || typeof message !== 'object') {
+    return;
+  }
+
+  if (message.type === 'ready' && typeof message.sampleRate === 'number') {
+    audioState.recordingSampleRate = message.sampleRate;
+    return;
+  }
+
+  if (message.type === 'data' && message.buffer instanceof ArrayBuffer) {
+    const chunk = new Float32Array(message.buffer);
+    if (!audioState.recordingChannelCount && message.channelCount) {
+      audioState.recordingChannelCount = message.channelCount;
+    }
+    audioState.recordingBuffers.push(chunk);
+  }
+}
+
+function mergeRecordingChunks(chunks) {
+  if (!Array.isArray(chunks) || !chunks.length) {
+    return new Float32Array(0);
+  }
+
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Float32Array(totalLength);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  });
+  return result;
+}
+
+function encodeWavFromInterleaved(interleaved, channelCount, sampleRate) {
+  const samples = interleaved.length;
+  const bytesPerSample = 4;
+  const blockAlign = channelCount * bytesPerSample;
+  const dataLength = samples * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 3, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples; i += 1) {
+    const sample = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setFloat32(offset, sample, true);
+    offset += bytesPerSample;
+  }
+
+  return buffer;
+}
+
+function writeString(view, offset, text) {
+  for (let i = 0; i < text.length; i += 1) {
+    view.setUint8(offset + i, text.charCodeAt(i));
+  }
+}
+
+function createRecordingFilename(extension = 'wav') {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const ext = extension.startsWith('.') ? extension.slice(1) : extension;
+  return `seqroom-recording-${timestamp}.${ext}`;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function syncAudioScheduler() {
