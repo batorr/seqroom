@@ -7,6 +7,8 @@ const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
 const STEP_COUNT = 16;
+const STEP_COUNT_MIN = 1;
+const STEP_COUNT_MAX = 128;
 const DEFAULT_TEMPO = 120;
 const SESSION_START_DELAY_MS = 2000;
 const SYNC_INTERVAL_MS = 2000;
@@ -76,6 +78,14 @@ const TR808_LEGACY_PARAM_MAP = {
   clapReverb: ['clap', 'reverb'],
   clapDecay: ['clap', 'decay'],
 };
+
+function clampStepCount(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return STEP_COUNT;
+  }
+  return clamp(Math.round(numeric), STEP_COUNT_MIN, STEP_COUNT_MAX);
+}
 
 function defaultInstrumentName(type) {
   switch (type) {
@@ -180,13 +190,16 @@ function createInstrument(type, options = {}) {
     throw new Error('unsupported-instrument');
   }
 
+  const initialStepCount = clampStepCount(options.stepCount ?? STEP_COUNT);
+
   const instrument = {
     id: randomUUID(),
     type,
     name: options.name || defaultInstrumentName(type),
     createdAt: Date.now(),
     params: createDefaultParams(type),
-    steps: Array.from({ length: STEP_COUNT }, () => createStepTemplate(type)),
+    stepCount: initialStepCount,
+    steps: createStepSequence(type, initialStepCount),
   };
 
   if (type === SynthTypes.TR808) {
@@ -194,6 +207,11 @@ function createInstrument(type, options = {}) {
   }
 
   return instrument;
+}
+
+function createStepSequence(type, length) {
+  const targetLength = clampStepCount(length);
+  return Array.from({ length: targetLength }, () => createStepTemplate(type));
 }
 
 function deepCloneTR808Params(params = {}) {
@@ -221,12 +239,16 @@ function cloneInstrument(instrument) {
     instrument.params = deepCloneTR808Params(instrument.params);
   }
 
+  const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
+  instrument.stepCount = normalizedStepCount;
+
   const base = {
     id: instrument.id,
     type: instrument.type,
     name: instrument.name,
     createdAt: instrument.createdAt,
     params: instrument.params,
+    stepCount: normalizedStepCount,
     steps: instrument.steps.map((step) => ({
       ...step,
       layers: step.layers ? { ...step.layers } : undefined,
@@ -240,6 +262,29 @@ function cloneInstrument(instrument) {
   }
 
   return base;
+}
+
+function ensureInstrumentStepCapacity(instrument, stepCount) {
+  if (!instrument) {
+    return false;
+  }
+
+  const targetLength = clampStepCount(stepCount);
+  const currentLength = Array.isArray(instrument.steps) ? instrument.steps.length : 0;
+  if (!Array.isArray(instrument.steps)) {
+    instrument.steps = [];
+  }
+
+  if (currentLength >= targetLength) {
+    return false;
+  }
+
+  let mutated = false;
+  for (let index = currentLength; index < targetLength; index += 1) {
+    instrument.steps.push(createStepTemplate(instrument.type));
+    mutated = true;
+  }
+  return mutated;
 }
 
 function cloneTransport(transport) {
@@ -418,7 +463,6 @@ function serializeRoomState(room) {
       .map(cloneInstrument),
     instrumentOrder: [...room.instrumentOrder],
     legacyPattern: [...room.legacyPattern],
-    stepCount: STEP_COUNT,
   };
 }
 
@@ -599,6 +643,37 @@ io.on('connection', (socket) => {
     broadcastTransportState(room.id);
   });
 
+  socket.on('instrument:set-length', ({ instrumentId, stepCount } = {}, callback) => {
+    const respond = typeof callback === 'function' ? callback : () => {};
+    const room = getRoomForSocket(socket);
+    if (!room) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    if (typeof instrumentId !== 'string') {
+      respond({ ok: false, error: 'invalid-instrument' });
+      return;
+    }
+
+    const instrument = room.instruments.get(instrumentId);
+    if (!instrument) {
+      respond({ ok: false, error: 'instrument-not-found' });
+      return;
+    }
+
+    const nextStepCount = clampStepCount(stepCount);
+    if (instrument.stepCount === nextStepCount) {
+      respond({ ok: true, stepCount: instrument.stepCount });
+      return;
+    }
+
+    instrument.stepCount = nextStepCount;
+    ensureInstrumentStepCapacity(instrument, instrument.stepCount);
+    broadcastInstrumentState(room.id, instrumentId);
+    respond({ ok: true, stepCount: instrument.stepCount });
+  });
+
   socket.on('instrument:add', ({ type, name } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const room = getRoomForSocket(socket);
@@ -677,11 +752,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (stepIndex < 0 || stepIndex >= instrument.steps.length) {
+    const normalizedIndex = Math.floor(stepIndex);
+    const activeStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+    if (normalizedIndex < 0 || normalizedIndex >= activeStepCount) {
       return;
     }
 
-    const targetStep = instrument.steps[stepIndex];
+    ensureInstrumentStepCapacity(instrument, Math.max(activeStepCount, normalizedIndex + 1));
+    const targetStep = instrument.steps[normalizedIndex];
 
     if (instrument.type === SynthTypes.TR808 && typeof drum === 'string') {
       const layers = ensureDrumLayers(targetStep);
@@ -759,6 +837,10 @@ function createRoomState(roomId) {
     instrumentOrder: [],
   };
 
+  const defaultInstrument = createInstrument(SynthTypes.SIMPLE);
+  state.instruments.set(defaultInstrument.id, defaultInstrument);
+  state.instrumentOrder.push(defaultInstrument.id);
+
   rooms.set(roomId, state);
   return state;
 }
@@ -779,7 +861,6 @@ async function joinRoom(socket, roomId) {
     transport: state.transport,
     instruments: state.instruments,
     instrumentOrder: state.instrumentOrder,
-    stepCount: state.stepCount,
     // Legacy fields for backward compatibility.
     pattern: state.legacyPattern,
     legacyPattern: state.legacyPattern,

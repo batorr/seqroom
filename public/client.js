@@ -1,4 +1,7 @@
 const STEP_COUNT = 16;
+const STEP_COUNT_MIN = 1;
+const STEP_COUNT_MAX = 128;
+const STEP_GRID_COLUMNS = 16;
 const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{4,16}$/;
 const TEMPO_MIN = 30;
 const TEMPO_MAX = 300;
@@ -19,6 +22,74 @@ const TR808_DRUMS = [
   { id: 'hat', label: 'Hat', color: '#38bdf8' },
   { id: 'clap', label: 'Clap', color: '#c084fc' },
 ];
+
+function hexToRgba(hex, alpha = 1) {
+  if (typeof hex !== 'string') {
+    return '';
+  }
+
+  const normalized = hex.trim().replace(/^#/, '');
+  const safeAlpha = Math.min(Math.max(Number(alpha), 0), 1);
+
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16);
+    const g = parseInt(normalized[1] + normalized[1], 16);
+    const b = parseInt(normalized[2] + normalized[2], 16);
+    if ([r, g, b].some((value) => Number.isNaN(value))) {
+      return '';
+    }
+    return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+  }
+
+  if (normalized.length === 6) {
+    const r = parseInt(normalized.slice(0, 2), 16);
+    const g = parseInt(normalized.slice(2, 4), 16);
+    const b = parseInt(normalized.slice(4, 6), 16);
+    if ([r, g, b].some((value) => Number.isNaN(value))) {
+      return '';
+    }
+    return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+  }
+
+  return '';
+}
+
+function clampStepCount(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return STEP_COUNT;
+  }
+  return Math.min(Math.max(Math.round(numeric), STEP_COUNT_MIN), STEP_COUNT_MAX);
+}
+
+function formatStepCountLabel(count) {
+  const normalized = clampStepCount(count);
+  return `${normalized} ${normalized === 1 ? 'step' : 'steps'}`;
+}
+
+function ensureLocalInstrumentCapacity(instrument, stepCount) {
+  if (!instrument) {
+    return;
+  }
+  const desired = clampStepCount(stepCount);
+  if (!Array.isArray(instrument.steps)) {
+    instrument.steps = [];
+  }
+  while (instrument.steps.length < desired) {
+    const template = instrument.type === SynthTypes.TR808 ? createEmptyDrumStep() : createEmptyMelodicStep();
+    instrument.steps.push(template);
+  }
+}
+
+function setInstrumentStepCountLocal(instrumentId, stepCount) {
+  const instrument = state.instruments.get(instrumentId);
+  if (!instrument) {
+    return;
+  }
+  const desired = clampStepCount(stepCount);
+  instrument.stepCount = desired;
+  ensureLocalInstrumentCapacity(instrument, desired);
+}
 
 const INSTRUMENT_LIBRARY = {
   [SynthTypes.TB303]: {
@@ -90,7 +161,7 @@ const state = {
   },
   instruments: new Map(),
   instrumentOrder: [],
-  stepCount: STEP_COUNT,
+  activeInstrumentId: null,
   tempoPreview: DEFAULT_BPM,
 };
 
@@ -337,6 +408,7 @@ function setupSocketEvents() {
       state.instrumentOrder.push(instrument.id);
     }
     renderInstruments();
+    setActiveInstrument(instrument.id);
   });
 
   socket.on('instrument:update', (instrument) => {
@@ -347,12 +419,23 @@ function setupSocketEvents() {
   socket.on('instrument:removed', ({ instrumentId }) => {
     state.instruments.delete(instrumentId);
     state.instrumentOrder = state.instrumentOrder.filter((id) => id !== instrumentId);
+    const wasActive = state.activeInstrumentId === instrumentId;
     removeInstrumentCard(instrumentId);
     renderEmptyState();
+    if (wasActive) {
+      const nextActive = state.instrumentOrder[0] || null;
+      setActiveInstrument(nextActive);
+    } else {
+      updateActiveInstrumentHighlight();
+    }
   });
 
   socket.on('instrument:order', (order = []) => {
     state.instrumentOrder = order.filter((id) => state.instruments.has(id));
+    if (state.activeInstrumentId && !state.instrumentOrder.includes(state.activeInstrumentId)) {
+      const nextActive = state.instrumentOrder[0] || null;
+      state.activeInstrumentId = nextActive;
+    }
     renderInstruments();
   });
 
@@ -399,24 +482,33 @@ function setupSocketEvents() {
   socket.on('connections:update', (count) => updateConnectionsDisplay(count));
 
   socket.on('step:update', ({ index, active }) => {
-    // Legacy support: map to first instrument if available.
-    const firstInstrumentId = state.instrumentOrder[0];
-    if (!firstInstrumentId) {
+    // Legacy support: map to active instrument if available.
+    const targetInstrumentId = state.activeInstrumentId || state.instrumentOrder[0];
+    if (!targetInstrumentId) {
       return;
     }
-    const instrument = state.instruments.get(firstInstrumentId);
+    const instrument = state.instruments.get(targetInstrumentId);
     if (!instrument || instrument.type === SynthTypes.TR808 || index < 0 || index >= instrument.steps.length) {
       return;
     }
     instrument.steps[index].active = Boolean(active);
-    renderInstrument(firstInstrumentId);
+    renderInstrument(targetInstrumentId);
   });
+}
+function getVisibleStepSlots(stepCount) {
+  const effective = clampStepCount(stepCount ?? STEP_COUNT);
+  const rows = Math.max(1, Math.ceil(effective / STEP_GRID_COLUMNS));
+  return rows * STEP_GRID_COLUMNS;
+}
+
+function formatStepIndex(index, visibleTotal) {
+  const padWidth = visibleTotal >= 100 ? 3 : 2;
+  return String(index + 1).padStart(padWidth, '0');
 }
 
 function hydrateState(payload) {
   state.isInRoom = true;
   state.roomId = payload.roomId || null;
-  state.stepCount = payload.stepCount || STEP_COUNT;
 
   const transport = payload.transport || {};
   state.transport = {
@@ -437,26 +529,13 @@ function hydrateState(payload) {
     state.instruments.set(instrument.id, normalizeInstrument(instrument));
   });
   state.instrumentOrder = (payload.instrumentOrder || []).filter((id) => state.instruments.has(id));
-
-  // Ensure legacy pattern is reflected if there are no instruments yet.
-  if (!state.instrumentOrder.length && Array.isArray(payload.legacyPattern)) {
-    const legacyInstrument = {
-      id: 'legacy-pattern',
-      type: SynthTypes.POLY,
-      name: 'Legacy Pattern',
-      createdAt: Date.now(),
-      params: {},
-      steps: payload.legacyPattern.map((active) => ({
-        active: Boolean(active),
-        pitch: 'C3',
-        velocity: 1,
-        accent: false,
-        slide: false,
-      })),
-    };
-    state.instruments.set(legacyInstrument.id, legacyInstrument);
-    state.instrumentOrder.push(legacyInstrument.id);
+  if (!state.instrumentOrder.length && state.instruments.size) {
+    state.instrumentOrder = Array.from(state.instruments.keys());
   }
+  const nextActiveInstrumentId = state.instrumentOrder[0] || null;
+  state.activeInstrumentId = nextActiveInstrumentId && state.instruments.has(nextActiveInstrumentId)
+    ? nextActiveInstrumentId
+    : null;
 
   roomDisplayEl.textContent = `Room: ${state.roomId ?? '—'}`;
 }
@@ -516,6 +595,12 @@ function renderInstruments() {
     }
   });
 
+  if (!state.instrumentOrder.length) {
+    state.activeInstrumentId = null;
+  } else if (!state.activeInstrumentId || !state.instruments.has(state.activeInstrumentId)) {
+    state.activeInstrumentId = state.instrumentOrder[0];
+  }
+
   const fragment = document.createDocumentFragment();
   state.instrumentOrder.forEach((instrumentId) => {
     const instrument = state.instruments.get(instrumentId);
@@ -530,6 +615,7 @@ function renderInstruments() {
   instrumentListEl.innerHTML = '';
   instrumentListEl.appendChild(fragment);
   renderEmptyState();
+  updateActiveInstrumentHighlight();
   updatePlaybackIndicators(getCurrentStepIndex());
 }
 
@@ -543,7 +629,72 @@ function renderInstrument(instrumentId) {
   const card = ensureInstrumentCard(instrument);
   updateInstrumentCard(card, instrument);
   renderEmptyState();
+  updateActiveInstrumentHighlight();
   updatePlaybackIndicators(getCurrentStepIndex());
+}
+
+function setActiveInstrument(instrumentId) {
+  if (instrumentId && !state.instruments.has(instrumentId)) {
+    instrumentId = null;
+  }
+  if (state.activeInstrumentId === instrumentId) {
+    updateActiveInstrumentHighlight();
+    return;
+  }
+  state.activeInstrumentId = instrumentId;
+  updateActiveInstrumentHighlight();
+}
+
+function updateActiveInstrumentHighlight() {
+  instrumentElements.forEach(({ root }, instrumentId) => {
+    root.classList.toggle('active', instrumentId === state.activeInstrumentId);
+  });
+}
+
+function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
+  const instrument = state.instruments.get(instrumentId);
+  if (!instrument) {
+    return;
+  }
+
+  const previous = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+  const desired = clampStepCount(nextStepCount);
+
+  if (desired === previous) {
+    setInstrumentStepCountLocal(instrumentId, desired);
+    renderInstrument(instrumentId);
+    updatePlaybackIndicators(getCurrentStepIndex());
+    return;
+  }
+
+  setInstrumentStepCountLocal(instrumentId, desired);
+  renderInstrument(instrumentId);
+  updatePlaybackIndicators(getCurrentStepIndex());
+
+  if (!state.isInRoom) {
+    return;
+  }
+
+  socket.emit('instrument:set-length', { instrumentId, stepCount: desired }, (response = {}) => {
+    if (!response.ok) {
+      if (response.error) {
+        console.error('Failed to update instrument length:', response.error);
+      }
+      setInstrumentStepCountLocal(instrumentId, previous);
+      renderInstrument(instrumentId);
+      updatePlaybackIndicators(getCurrentStepIndex());
+      return;
+    }
+
+    if (typeof response.stepCount === 'number') {
+      const acknowledged = clampStepCount(response.stepCount);
+      if (acknowledged !== desired) {
+        setInstrumentStepCountLocal(instrumentId, acknowledged);
+        renderInstrument(instrumentId);
+      }
+      updatePlaybackIndicators(getCurrentStepIndex());
+    }
+  });
 }
 
 function ensureInstrumentCard(instrument) {
@@ -561,6 +712,16 @@ function ensureInstrumentCard(instrument) {
     socket.emit('instrument:remove', { instrumentId: instrument.id });
   });
 
+  node.addEventListener('click', (event) => {
+    if (event.target.closest('.remove-instrument')) {
+      return;
+    }
+    const targetId = node.dataset.instrumentId;
+    if (targetId) {
+      setActiveInstrument(targetId);
+    }
+  });
+
   const cardEntry = {
     root: node,
     paramsContainer: node.querySelector('.synth-params'),
@@ -568,6 +729,45 @@ function ensureInstrumentCard(instrument) {
     stepRefs: [],
     drumSelector: null,
     activeDrum: 'kick',
+    stepControl: null,
+  };
+
+  const controlsRow = document.createElement('div');
+  controlsRow.className = 'instrument-controls';
+
+  const stepControl = document.createElement('div');
+  stepControl.className = 'step-length-control';
+
+  const stepLabel = document.createElement('span');
+  stepLabel.textContent = 'Steps';
+
+  const stepSlider = document.createElement('input');
+  stepSlider.type = 'range';
+  stepSlider.min = String(STEP_COUNT_MIN);
+  stepSlider.max = String(STEP_COUNT_MAX);
+  stepSlider.step = '1';
+
+  const stepValue = document.createElement('span');
+
+  stepControl.append(stepLabel, stepSlider, stepValue);
+  controlsRow.appendChild(stepControl);
+  node.insertBefore(controlsRow, cardEntry.paramsContainer);
+
+  const instrumentId = instrument.id;
+  stepSlider.addEventListener('input', () => {
+    const preview = clampStepCount(stepSlider.value);
+    stepValue.textContent = formatStepCountLabel(preview);
+  });
+
+  stepSlider.addEventListener('change', () => {
+    const desired = clampStepCount(stepSlider.value);
+    requestInstrumentStepCountChange(instrumentId, desired);
+  });
+
+  cardEntry.stepControl = {
+    container: controlsRow,
+    slider: stepSlider,
+    value: stepValue,
   };
 
   const drumSelector = document.createElement('div');
@@ -583,6 +783,7 @@ function ensureInstrumentCard(instrument) {
 function updateInstrumentCard(card, instrument) {
   const entry = instrumentElements.get(instrument.id);
   const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
+  card.dataset.instrumentId = instrument.id;
   card.classList.remove('tone-acid', 'tone-808', 'tone-poly');
   if (definition.toneClass) {
     card.classList.add(definition.toneClass);
@@ -595,6 +796,12 @@ function updateInstrumentCard(card, instrument) {
 
   const paramsContainer = entry.paramsContainer;
   renderParamControls(paramsContainer, instrument, definition);
+
+  if (entry.stepControl) {
+    const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+    entry.stepControl.slider.value = String(stepCount);
+    entry.stepControl.value.textContent = formatStepCountLabel(stepCount);
+  }
 
   if (entry.drumSelector) {
     if (instrument.type === SynthTypes.TR808) {
@@ -758,22 +965,23 @@ function renderStepGrid(container, instrument) {
 function renderMelodicStepGrid(container, instrument) {
   container.innerHTML = '';
   const steps = instrument.steps || [];
-  const totalSteps = state.stepCount || STEP_COUNT;
-  const hasSteps = steps.length > 0;
   const entry = instrumentElements.get(instrument.id);
+  const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
+  const visibleSteps = getVisibleStepSlots(instrumentStepCount);
+  const activeSteps = instrumentStepCount;
   const stepRefs = [];
 
-  for (let i = 0; i < totalSteps; i += 1) {
-    const patternIndex = hasSteps ? i % steps.length : i;
-    const step = hasSteps
-      ? steps[patternIndex]
-      : {
-          active: false,
-          pitch: 'C3',
-          velocity: 1,
-          accent: false,
-          slide: false,
-        };
+  for (let i = 0; i < visibleSteps; i += 1) {
+    const patternIndex = i;
+    const withinPattern = patternIndex < activeSteps;
+
+    let step = steps[patternIndex];
+    if (!step && withinPattern) {
+      step = createEmptyMelodicStep();
+      steps[patternIndex] = step;
+    } else if (!step) {
+      step = createEmptyMelodicStep();
+    }
 
     const cell = document.createElement('div');
     cell.className = 'step-cell';
@@ -782,8 +990,6 @@ function renderMelodicStepGrid(container, instrument) {
     toggleBtn.type = 'button';
     toggleBtn.className = 'step-toggle';
     toggleBtn.dataset.stepIndex = String(patternIndex);
-    toggleBtn.classList.toggle('active', Boolean(step.active));
-    cell.classList.toggle('active', Boolean(step.active));
 
     const note = document.createElement('span');
     note.className = 'step-note';
@@ -791,38 +997,51 @@ function renderMelodicStepGrid(container, instrument) {
 
     const indexLabel = document.createElement('span');
     indexLabel.className = 'step-index';
-    indexLabel.textContent = String(i + 1).padStart(2, '0');
+    indexLabel.textContent = formatStepIndex(i, visibleSteps);
 
     toggleBtn.appendChild(note);
     toggleBtn.appendChild(indexLabel);
 
-    toggleBtn.addEventListener('click', () => {
-      const nextActive = !step.active;
-      step.active = nextActive;
-      toggleBtn.classList.toggle('active', nextActive);
-      cell.classList.toggle('active', nextActive);
-      socket.emit('instrument:step', {
-        instrumentId: instrument.id,
-        stepIndex: patternIndex,
-        step: { active: nextActive },
+    const isActive = withinPattern && Boolean(step.active);
+    toggleBtn.classList.toggle('active', isActive);
+    toggleBtn.disabled = !withinPattern;
+    cell.classList.toggle('active', isActive);
+    cell.classList.toggle('step-disabled', !withinPattern);
+
+    if (withinPattern) {
+      toggleBtn.addEventListener('click', () => {
+        const nextActive = !step.active;
+        step.active = nextActive;
+        toggleBtn.classList.toggle('active', nextActive);
+        cell.classList.toggle('active', nextActive);
+        socket.emit('instrument:step', {
+          instrumentId: instrument.id,
+          stepIndex: patternIndex,
+          step: { active: nextActive },
+        });
       });
-    });
+    }
 
     const pitchSelect = createPitchSelect(step.pitch || 'C3');
-    const resolvedInitial = pitchSelect.value;
-    step.pitch = resolvedInitial;
-    note.textContent = resolvedInitial;
-    pitchSelect.addEventListener('change', (event) => {
-      event.stopPropagation();
-      const selectedNote = pitchSelect.value;
-      step.pitch = selectedNote;
-      note.textContent = selectedNote;
-      socket.emit('instrument:step', {
-        instrumentId: instrument.id,
-        stepIndex: patternIndex,
-        step: { pitch: selectedNote },
+    if (withinPattern) {
+      const resolvedInitial = pitchSelect.value;
+      step.pitch = resolvedInitial;
+      note.textContent = resolvedInitial;
+      pitchSelect.addEventListener('change', (event) => {
+        event.stopPropagation();
+        const selectedNote = pitchSelect.value;
+        step.pitch = selectedNote;
+        note.textContent = selectedNote;
+        socket.emit('instrument:step', {
+          instrumentId: instrument.id,
+          stepIndex: patternIndex,
+          step: { pitch: selectedNote },
+        });
       });
-    });
+    } else {
+      pitchSelect.disabled = true;
+      pitchSelect.classList.add('step-select-disabled');
+    }
 
     pitchSelect.addEventListener('click', (event) => event.stopPropagation());
 
@@ -830,7 +1049,7 @@ function renderMelodicStepGrid(container, instrument) {
     cell.appendChild(pitchSelect);
     container.appendChild(cell);
 
-    stepRefs.push({ cell, toggleBtn, pitchSelect });
+    stepRefs.push({ cell, toggleBtn, pitchSelect, disabled: !withinPattern });
   }
 
   if (entry) {
@@ -841,7 +1060,9 @@ function renderMelodicStepGrid(container, instrument) {
 function renderDrumStepGrid(container, instrument) {
   container.innerHTML = '';
   const steps = instrument.steps || [];
-  const totalSteps = state.stepCount || STEP_COUNT;
+  const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
+  const visibleSteps = getVisibleStepSlots(instrumentStepCount);
+  const activeSteps = instrumentStepCount;
   const entry = instrumentElements.get(instrument.id);
   if (!entry) {
     return;
@@ -849,12 +1070,13 @@ function renderDrumStepGrid(container, instrument) {
   const activeDrum = entry?.activeDrum || TR808_DRUMS[0].id;
   const stepRefs = [];
 
-  for (let i = 0; i < totalSteps; i += 1) {
+  for (let i = 0; i < visibleSteps; i += 1) {
     const patternIndex = i;
+    const withinPattern = patternIndex < activeSteps;
     const baseStep = createEmptyDrumStep();
     const originalStep = steps[patternIndex] || createEmptyDrumStep();
     originalStep.layers = { ...baseStep.layers, ...(originalStep.layers || {}) };
-    if (!steps[patternIndex]) {
+    if (!steps[patternIndex] && withinPattern) {
       steps[patternIndex] = originalStep;
     }
     const step = originalStep;
@@ -862,16 +1084,20 @@ function renderDrumStepGrid(container, instrument) {
     const cell = document.createElement('div');
     cell.className = 'step-cell drum-cell';
     const drumMeta = TR808_DRUMS.find((drum) => drum.id === activeDrum) || TR808_DRUMS[0];
-    const isActive = Boolean(step.layers[activeDrum]);
+    const isActive = withinPattern && Boolean(step.layers[activeDrum]);
     step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
+    const activeBackground = hexToRgba(drumMeta.color, 0.25) || 'rgba(56, 189, 248, 0.22)';
     cell.style.setProperty('--drum-color', drumMeta.color);
+    cell.style.setProperty('--drum-active-bg', activeBackground);
     cell.classList.toggle('active', isActive);
     cell.classList.toggle('drum-active', isActive);
+    cell.classList.toggle('step-disabled', !withinPattern);
 
     const toggleBtn = document.createElement('button');
     toggleBtn.type = 'button';
     toggleBtn.className = 'step-toggle drum-step-toggle';
     toggleBtn.dataset.stepIndex = String(patternIndex);
+    toggleBtn.disabled = !withinPattern;
 
     const indicator = document.createElement('span');
     indicator.className = 'drum-indicator';
@@ -880,14 +1106,16 @@ function renderDrumStepGrid(container, instrument) {
 
     const indexLabel = document.createElement('span');
     indexLabel.className = 'step-index';
-    indexLabel.textContent = String(i + 1).padStart(2, '0');
+    indexLabel.textContent = formatStepIndex(i, visibleSteps);
 
     toggleBtn.appendChild(indicator);
     toggleBtn.appendChild(indexLabel);
 
     toggleBtn.addEventListener('click', () => {
-      const entryRef = instrumentElements.get(instrument.id);
-      const currentDrum = entryRef?.activeDrum || TR808_DRUMS[0].id;
+      if (!withinPattern) {
+        return;
+      }
+      const currentDrum = entry.activeDrum || TR808_DRUMS[0].id;
       const current = Boolean(step.layers[currentDrum]);
       const next = !current;
       step.layers[currentDrum] = next;
@@ -895,12 +1123,14 @@ function renderDrumStepGrid(container, instrument) {
       const drumInfo = TR808_DRUMS.find((d) => d.id === currentDrum) || drumMeta;
       const selectedColor = drumInfo.color;
       indicator.style.setProperty('--drum-color', selectedColor);
+      const selectedBackground = hexToRgba(selectedColor, 0.25) || activeBackground;
 
       const isActiveNow = Boolean(step.layers[currentDrum]);
-      indicator.classList.toggle('active', isActiveNow && currentDrum === entryRef.activeDrum);
+      indicator.classList.toggle('active', isActiveNow && currentDrum === entry.activeDrum);
       cell.style.setProperty('--drum-color', selectedColor);
-      cell.classList.toggle('drum-active', isActiveNow && currentDrum === entryRef.activeDrum);
-      cell.classList.toggle('active', isActiveNow && currentDrum === entryRef.activeDrum);
+      cell.style.setProperty('--drum-active-bg', selectedBackground);
+      cell.classList.toggle('drum-active', isActiveNow && currentDrum === entry.activeDrum);
+      cell.classList.toggle('active', isActiveNow && currentDrum === entry.activeDrum);
 
       step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
 
@@ -915,7 +1145,7 @@ function renderDrumStepGrid(container, instrument) {
     cell.appendChild(toggleBtn);
     container.appendChild(cell);
 
-    stepRefs.push({ cell, toggleBtn, indicator });
+    stepRefs.push({ cell, toggleBtn, indicator, disabled: !withinPattern });
   }
 
   if (entry) {
@@ -942,16 +1172,23 @@ function renderEmptyState() {
 }
 
 function updatePlaybackIndicators(stepIndex) {
-  const totalSteps = state.stepCount || STEP_COUNT;
-  const normalizedIndex = stepIndex >= 0 && totalSteps > 0 ? stepIndex % totalSteps : -1;
-
-  instrumentElements.forEach(({ stepRefs }) => {
+  instrumentElements.forEach(({ stepRefs }, instrumentId) => {
     if (!stepRefs || !stepRefs.length) {
       return;
     }
 
+    const instrument = state.instruments.get(instrumentId);
+    if (!instrument) {
+      stepRefs.forEach((ref) => ref.cell.classList.remove('playing'));
+      return;
+    }
+
+    const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+    const normalizedIndex = stepIndex >= 0 && instrumentStepCount > 0 ? stepIndex % instrumentStepCount : -1;
+
     stepRefs.forEach((ref, index) => {
-      const isPlaying = state.transport.playing && normalizedIndex === index;
+      const canPlay = index < instrumentStepCount && !ref?.disabled;
+      const isPlaying = state.transport.playing && canPlay && normalizedIndex === index;
       ref.cell.classList.toggle('playing', isPlaying);
     });
   });
@@ -985,6 +1222,7 @@ function connectToRoom(roomId, { mode }) {
   state.roomId = null;
   state.instruments.clear();
   state.instrumentOrder = [];
+  state.activeInstrumentId = null;
   renderInstruments();
   updateConnectionsDisplay(0);
 
@@ -1041,6 +1279,7 @@ function leaveRoom() {
   state.roomId = null;
   state.instruments.clear();
   state.instrumentOrder = [];
+  state.activeInstrumentId = null;
   renderInstruments();
   transportToggleBtn.disabled = true;
   transportToggleBtn.classList.remove('playing');
@@ -1064,6 +1303,7 @@ socket.on('disconnect', () => {
   state.roomId = null;
   state.instruments.clear();
   state.instrumentOrder = [];
+  state.activeInstrumentId = null;
   renderInstruments();
   transportToggleBtn.disabled = true;
   transportToggleBtn.classList.remove('playing');
@@ -1472,9 +1712,6 @@ function runAudioScheduler() {
 }
 
 function scheduleStep(stepNumber, when) {
-  const stepCount = Math.max(state.stepCount, 1);
-  const localIndex = stepNumber % stepCount;
-
   state.instrumentOrder.forEach((instrumentId) => {
     const instrument = state.instruments.get(instrumentId);
     if (!instrument) {
@@ -1485,7 +1722,14 @@ function scheduleStep(stepNumber, when) {
     if (!steps.length) {
       return;
     }
-    const step = steps[localIndex % steps.length];
+
+    const instrumentStepCount = clampStepCount(instrument.stepCount ?? steps.length ?? STEP_COUNT);
+    if (instrumentStepCount <= 0) {
+      return;
+    }
+
+    const localIndex = stepNumber % instrumentStepCount;
+    const step = steps[localIndex] || steps[localIndex % steps.length];
     if (!step || !step.active) {
       return;
     }
@@ -1785,24 +2029,35 @@ function selectParam(key, label, options) {
 }
 
 function normalizeInstrument(instrument) {
+  const rawSteps = Array.isArray(instrument.steps) ? instrument.steps : [];
+  const normalizedStepCount = clampStepCount(instrument.stepCount ?? rawSteps.length ?? STEP_COUNT);
+
+  const normalizedSteps = rawSteps.map((step) => {
+    const cloned = {
+      ...step,
+      layers: step?.layers ? { ...step.layers } : undefined,
+    };
+    if (instrument.type === SynthTypes.TR808) {
+      const base = createEmptyDrumStep();
+      cloned.layers = { ...base.layers, ...(cloned.layers || {}) };
+      cloned.active = TR808_DRUMS.some((drum) => cloned.layers[drum.id]);
+    }
+    return cloned;
+  });
+
+  while (normalizedSteps.length < normalizedStepCount) {
+    const template = instrument.type === SynthTypes.TR808 ? createEmptyDrumStep() : createEmptyMelodicStep();
+    normalizedSteps.push(template);
+  }
+
   return {
     id: instrument.id,
     type: instrument.type,
     name: instrument.name,
     createdAt: instrument.createdAt,
     params: { ...instrument.params },
-    steps: (instrument.steps || []).map((step) => {
-      const cloned = {
-        ...step,
-        layers: step.layers ? { ...step.layers } : undefined,
-      };
-      if (instrument.type === SynthTypes.TR808) {
-        const base = createEmptyDrumStep();
-        cloned.layers = { ...base.layers, ...(cloned.layers || {}) };
-        cloned.active = TR808_DRUMS.some((drum) => cloned.layers[drum.id]);
-      }
-      return cloned;
-    }),
+    stepCount: normalizedStepCount,
+    steps: normalizedSteps,
   };
 }
 
@@ -1851,6 +2106,16 @@ function createPitchSelect(selected) {
     select.value = selected;
   }
   return select;
+}
+
+function createEmptyMelodicStep() {
+  return {
+    active: false,
+    pitch: 'C3',
+    velocity: 1,
+    accent: false,
+    slide: false,
+  };
 }
 
 function createEmptyDrumStep() {
