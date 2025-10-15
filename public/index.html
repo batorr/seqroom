@@ -280,6 +280,14 @@
         color: rgba(148, 163, 184, 0.9);
       }
 
+      .recording-status {
+        color: #facc15;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-variant-numeric: tabular-nums;
+      }
+
       .transport-status-right {
         display: flex;
         align-items: center;
@@ -351,12 +359,71 @@
         accent-color: #818cf8;
       }
 
+      .numeric-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.55);
+        color: rgba(226, 232, 240, 0.95);
+        font-size: 0.85rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .numeric-input:focus {
+        outline: none;
+        border-color: rgba(129, 140, 248, 0.6);
+        box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+      }
+
+      .numeric-input::-webkit-inner-spin-button,
+      .numeric-input::-webkit-outer-spin-button {
+        height: auto;
+      }
+
+      .step-count-input {
+        width: 64px;
+      }
+
+      .tempo-input {
+        width: 72px;
+        margin: 0 8px;
+      }
+
       .step-length-control span {
         font-size: 0.82rem;
         letter-spacing: 0.06em;
         min-width: 56px;
         text-align: right;
         color: rgba(226, 232, 240, 0.95);
+      }
+
+      .step-presets {
+        display: flex;
+        gap: 6px;
+      }
+
+      .step-preset-button {
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: rgba(15, 23, 42, 0.45);
+        color: rgba(226, 232, 240, 0.85);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+
+      .step-preset-button:hover {
+        background: rgba(129, 140, 248, 0.25);
+        border-color: rgba(129, 140, 248, 0.55);
+      }
+
+      .step-preset-button.selected {
+        background: rgba(129, 140, 248, 0.35);
+        border-color: rgba(129, 140, 248, 0.7);
+        color: rgba(15, 23, 42, 0.9);
       }
 
       .synth-card.tone-acid {
@@ -879,6 +946,7 @@
               <input id="tempo" type="range" min="30" max="300" step="1" value="120" />
               <input
                 id="tempo-input"
+                class="numeric-input tempo-input"
                 type="number"
                 min="30"
                 max="300"
@@ -897,6 +965,7 @@
               <span id="room-display">Room: —</span>
               <div class="transport-status-meta">
                 <span id="sync-status">Syncing clock…</span>
+                <span id="recording-status" class="recording-status hidden"></span>
               </div>
             </div>
             <div class="transport-status-right">

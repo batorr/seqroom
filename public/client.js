@@ -185,6 +185,7 @@ const instrumentEmptyEl = document.getElementById('instrument-empty');
 const addSynthModal = document.getElementById('add-synth-modal');
 const closeSynthModalBtn = document.getElementById('close-synth-modal');
 const instrumentTemplate = document.getElementById('instrument-card-template');
+const recordingStatusEl = document.getElementById('recording-status');
 
 const socket = io({ autoConnect: false });
 
@@ -203,14 +204,20 @@ const audioState = {
   lastStepDurationMs: null,
   isRecording: false,
   recordingNode: null,
-  recordingBuffers: [],
+  recordingChunks: [],
   recordingSampleRate: null,
+  recordingContextSampleRate: null,
   recordingChannelCount: 0,
+  recordingTotalSamples: 0,
+  recordingFrameCount: 0,
+  recordingByteLength: 0,
+  recordingStatsLastUpdate: 0,
   recordingModuleLoaded: false,
 };
 
 const AUDIO_LOOKAHEAD_MS = 25;
 const AUDIO_SCHEDULE_AHEAD_SECONDS = 0.18;
+const RECORDING_STATS_UPDATE_INTERVAL_MS = 200;
 
 initialize();
 
@@ -266,28 +273,43 @@ function setupTempoControls() {
     commitTempo(nextTempo);
   });
 
-  tempoInputField.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') {
-      return;
-    }
+  if (tempoInputField) {
+    tempoInputField.type = 'number';
+    tempoInputField.min = String(TEMPO_MIN);
+    tempoInputField.max = String(TEMPO_MAX);
+    tempoInputField.step = '1';
 
-    const value = Number(event.target.value);
-    if (!Number.isFinite(value)) {
+    const handleTempoInput = (rawValue, { enforce = false } = {}) => {
+      if (rawValue === '') {
+        return;
+      }
+      const numeric = Number(rawValue);
+      if (!Number.isFinite(numeric)) {
+        return;
+      }
+      if (numeric >= TEMPO_MIN && numeric <= TEMPO_MAX) {
+        commitTempo(numeric);
+      } else if (enforce) {
+        const clamped = clampTempo(numeric);
+        commitTempo(clamped);
+      }
+    };
+
+    tempoInputField.addEventListener('input', (event) => {
+      event.stopPropagation();
+      handleTempoInput(event.target.value);
+    });
+
+    tempoInputField.addEventListener('change', (event) => {
+      event.stopPropagation();
+      handleTempoInput(event.target.value, { enforce: true });
       updateTempoDisplay(state.transport.bpm);
-      return;
-    }
+    });
 
-    if (value < TEMPO_MIN || value > TEMPO_MAX) {
+    tempoInputField.addEventListener('blur', () => {
       updateTempoDisplay(state.transport.bpm);
-      return;
-    }
-
-    commitTempo(value);
-  });
-
-  tempoInputField.addEventListener('blur', () => {
-    updateTempoDisplay(state.transport.bpm);
-  });
+    });
+  }
 }
 
 function setupTransportControls() {
@@ -318,6 +340,8 @@ function setupRecordingControls() {
   if (!recordToggleBtn) {
     return;
   }
+
+  updateRecordingStatsDisplay();
 
   if (!isRecordingSupported()) {
     recordToggleBtn.disabled = true;
@@ -652,6 +676,10 @@ function updateActiveInstrumentHighlight() {
 }
 
 function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
+  if (state.activeInstrumentId !== instrumentId) {
+    setActiveInstrument(instrumentId);
+  }
+
   const instrument = state.instruments.get(instrumentId);
   if (!instrument) {
     return;
@@ -747,27 +775,97 @@ function ensureInstrumentCard(instrument) {
   stepSlider.max = String(STEP_COUNT_MAX);
   stepSlider.step = '1';
 
+  const stepNumberInput = document.createElement('input');
+  stepNumberInput.type = 'number';
+  stepNumberInput.min = String(STEP_COUNT_MIN);
+  stepNumberInput.max = String(STEP_COUNT_MAX);
+  stepNumberInput.step = '1';
+  stepNumberInput.className = 'numeric-input step-count-input';
+
   const stepValue = document.createElement('span');
 
-  stepControl.append(stepLabel, stepSlider, stepValue);
+  const presetContainer = document.createElement('div');
+  presetContainer.className = 'step-presets';
+  const presetValues = [16, 32, 64, 128];
+  const presetButtons = presetValues.map((preset) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'step-preset-button';
+    button.textContent = String(preset);
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (state.activeInstrumentId !== instrument.id) {
+        setActiveInstrument(instrument.id);
+      }
+      requestInstrumentStepCountChange(instrument.id, preset);
+    });
+    presetContainer.appendChild(button);
+    return button;
+  });
+
+  stepControl.append(stepLabel, stepSlider, stepNumberInput, stepValue, presetContainer);
   controlsRow.appendChild(stepControl);
   node.insertBefore(controlsRow, cardEntry.paramsContainer);
 
   const instrumentId = instrument.id;
-  stepSlider.addEventListener('input', () => {
+  stepSlider.addEventListener('input', (event) => {
+    event.stopPropagation();
+    if (state.activeInstrumentId !== instrument.id) {
+      setActiveInstrument(instrument.id);
+    }
     const preview = clampStepCount(stepSlider.value);
+    stepNumberInput.value = String(preview);
     stepValue.textContent = formatStepCountLabel(preview);
+    presetButtons.forEach((button) => {
+      const presetValue = Number(button.textContent);
+      button.classList.toggle('selected', presetValue === preview);
+    });
   });
 
-  stepSlider.addEventListener('change', () => {
+  stepSlider.addEventListener('change', (event) => {
+    event.stopPropagation();
+    if (state.activeInstrumentId !== instrument.id) {
+      setActiveInstrument(instrument.id);
+    }
     const desired = clampStepCount(stepSlider.value);
+    requestInstrumentStepCountChange(instrumentId, desired);
+  });
+
+  stepNumberInput.addEventListener('input', (event) => {
+    event.stopPropagation();
+    if (state.activeInstrumentId !== instrument.id) {
+      setActiveInstrument(instrument.id);
+    }
+    if (stepNumberInput.value === '') {
+      return;
+    }
+    const desired = clampStepCount(stepNumberInput.value);
+    if (String(desired) !== stepNumberInput.value) {
+      stepNumberInput.value = String(desired);
+    }
+    requestInstrumentStepCountChange(instrumentId, desired);
+  });
+
+  stepNumberInput.addEventListener('change', (event) => {
+    event.stopPropagation();
+    if (state.activeInstrumentId !== instrument.id) {
+      setActiveInstrument(instrument.id);
+    }
+    if (stepNumberInput.value === '') {
+      stepNumberInput.value = String(clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT)));
+      return;
+    }
+    const desired = clampStepCount(stepNumberInput.value);
+    stepNumberInput.value = String(desired);
     requestInstrumentStepCountChange(instrumentId, desired);
   });
 
   cardEntry.stepControl = {
     container: controlsRow,
     slider: stepSlider,
+    input: stepNumberInput,
     value: stepValue,
+    presets: presetButtons,
   };
 
   const drumSelector = document.createElement('div');
@@ -801,6 +899,15 @@ function updateInstrumentCard(card, instrument) {
     const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
     entry.stepControl.slider.value = String(stepCount);
     entry.stepControl.value.textContent = formatStepCountLabel(stepCount);
+    if (entry.stepControl.input) {
+      entry.stepControl.input.value = String(stepCount);
+    }
+    if (Array.isArray(entry.stepControl.presets)) {
+      entry.stepControl.presets.forEach((button) => {
+        const presetValue = Number(button.textContent);
+        button.classList.toggle('selected', presetValue === stepCount);
+      });
+    }
   }
 
   if (entry.drumSelector) {
@@ -1424,9 +1531,14 @@ async function startRecording() {
     return;
   }
 
-  audioState.recordingBuffers = [];
+  audioState.recordingChunks = [];
   audioState.recordingChannelCount = 0;
-  audioState.recordingSampleRate = ctx.sampleRate;
+  audioState.recordingSampleRate = null;
+  audioState.recordingContextSampleRate = ctx.sampleRate;
+  audioState.recordingTotalSamples = 0;
+  audioState.recordingFrameCount = 0;
+  audioState.recordingByteLength = 0;
+  audioState.recordingStatsLastUpdate = 0;
 
   let recorderNode;
   const channelCount = ctx.destination?.channelCount || 2;
@@ -1468,6 +1580,7 @@ async function startRecording() {
   audioState.recordingNode = recorderNode;
   audioState.isRecording = true;
   updateRecordButton(true);
+  updateRecordingStatsDisplay();
 }
 
 function stopRecording(options = {}) {
@@ -1491,34 +1604,31 @@ function stopRecording(options = {}) {
   updateRecordButton(false);
 
   if (!wasRecording) {
-    audioState.recordingBuffers = [];
-    audioState.recordingChannelCount = 0;
-    audioState.recordingSampleRate = null;
+    clearRecordingData();
     return;
   }
+
+  const chunks = audioState.recordingChunks.slice();
+  const totalSamples = audioState.recordingTotalSamples;
+  const channelCount = Math.max(1, audioState.recordingChannelCount || 1);
+  const sampleRate = audioState.recordingSampleRate
+    ?? audioState.recordingContextSampleRate
+    ?? 48000;
+
+  clearRecordingData();
 
   if (!download) {
-    audioState.recordingBuffers = [];
-    audioState.recordingChannelCount = 0;
-    audioState.recordingSampleRate = null;
     return;
   }
 
-  const buffers = audioState.recordingBuffers;
-  const channelCount = Math.max(1, audioState.recordingChannelCount || 1);
-  const sampleRate = audioState.recordingSampleRate || audioState.context?.sampleRate || 44100;
-  audioState.recordingBuffers = [];
-  audioState.recordingChannelCount = 0;
-  audioState.recordingSampleRate = null;
-
-  if (!buffers.length) {
+  if (!chunks.length || !Number.isFinite(totalSamples) || totalSamples <= 0) {
     return;
   }
 
-  const interleaved = mergeRecordingChunks(buffers);
+  const interleaved = mergeRecordingChunks(chunks, totalSamples);
   const wavBuffer = encodeWavFromInterleaved(interleaved, channelCount, sampleRate);
   const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
-  downloadBlob(wavBlob, createRecordingFilename('wav'));
+  downloadBlob(wavBlob, 'seqroom_recording.wav');
 }
 
 async function ensureRecordingWorklet(ctx) {
@@ -1540,25 +1650,123 @@ function handleRecordingMessage(event) {
 
   if (message.type === 'ready' && typeof message.sampleRate === 'number') {
     audioState.recordingSampleRate = message.sampleRate;
+    updateRecordingStatsDisplay();
     return;
   }
 
   if (message.type === 'data' && message.buffer instanceof ArrayBuffer) {
     const chunk = new Float32Array(message.buffer);
-    if (!audioState.recordingChannelCount && message.channelCount) {
-      audioState.recordingChannelCount = message.channelCount;
+
+    if (message.channelCount && message.channelCount > 0) {
+      if (!audioState.recordingChannelCount) {
+        audioState.recordingChannelCount = message.channelCount;
+      } else if (audioState.recordingChannelCount !== message.channelCount) {
+        console.warn(
+          'Recording channel count changed:',
+          audioState.recordingChannelCount,
+          '→',
+          message.channelCount,
+        );
+        audioState.recordingChannelCount = message.channelCount;
+      }
     }
-    audioState.recordingBuffers.push(chunk);
+
+    audioState.recordingChunks.push(chunk);
+    audioState.recordingTotalSamples += chunk.length;
+    audioState.recordingByteLength += chunk.byteLength;
+
+    const channelCount = Math.max(1, audioState.recordingChannelCount || message.channelCount || 1);
+    if (channelCount > 0) {
+      audioState.recordingFrameCount += chunk.length / channelCount;
+    }
+
+    maybeUpdateRecordingStatsDisplay();
   }
 }
 
-function mergeRecordingChunks(chunks) {
+function clearRecordingData() {
+  audioState.recordingChunks = [];
+  audioState.recordingTotalSamples = 0;
+  audioState.recordingByteLength = 0;
+  audioState.recordingFrameCount = 0;
+  audioState.recordingChannelCount = 0;
+  audioState.recordingSampleRate = null;
+  audioState.recordingContextSampleRate = null;
+  audioState.recordingStatsLastUpdate = 0;
+  updateRecordingStatsDisplay();
+}
+
+function updateRecordingStatsDisplay() {
+  if (!recordingStatusEl) {
+    return;
+  }
+
+  if (!audioState.isRecording) {
+    recordingStatusEl.textContent = '';
+    recordingStatusEl.classList.add('hidden');
+    return;
+  }
+
+  const channelCount = Math.max(1, audioState.recordingChannelCount || 1);
+  const sampleRate = audioState.recordingSampleRate
+    ?? audioState.recordingContextSampleRate
+    ?? audioState.context?.sampleRate
+    ?? 48000;
+  const frames = audioState.recordingFrameCount
+    || (channelCount > 0 ? audioState.recordingTotalSamples / channelCount : 0);
+  const durationSeconds = frames / sampleRate;
+  const totalBytes = audioState.recordingByteLength + 44;
+
+  recordingStatusEl.textContent = `Recording ${formatDuration(durationSeconds)} • ${formatBytes(totalBytes)}`;
+  recordingStatusEl.classList.remove('hidden');
+}
+
+function maybeUpdateRecordingStatsDisplay() {
+  if (!audioState.isRecording) {
+    return;
+  }
+  const now = performance.now();
+  if (!audioState.recordingStatsLastUpdate || now - audioState.recordingStatsLastUpdate >= RECORDING_STATS_UPDATE_INTERVAL_MS) {
+    audioState.recordingStatsLastUpdate = now;
+    updateRecordingStatsDisplay();
+  }
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '00:00';
+  }
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const precision = unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function mergeRecordingChunks(chunks, totalLength) {
   if (!Array.isArray(chunks) || !chunks.length) {
     return new Float32Array(0);
   }
 
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Float32Array(totalLength);
+  const finalLength = Number.isFinite(totalLength) && totalLength > 0
+    ? Math.max(0, Math.floor(totalLength))
+    : chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+
+  const result = new Float32Array(finalLength);
   let offset = 0;
   chunks.forEach((chunk) => {
     result.set(chunk, offset);
@@ -1570,7 +1778,9 @@ function mergeRecordingChunks(chunks) {
 function encodeWavFromInterleaved(interleaved, channelCount, sampleRate) {
   const samples = interleaved.length;
   const bytesPerSample = 4;
-  const blockAlign = channelCount * bytesPerSample;
+  const safeChannelCount = Math.max(1, Math.floor(channelCount) || 1);
+  const normalizedSampleRate = Math.max(1, Math.round(sampleRate));
+  const blockAlign = safeChannelCount * bytesPerSample;
   const dataLength = samples * bytesPerSample;
   const buffer = new ArrayBuffer(44 + dataLength);
   const view = new DataView(buffer);
@@ -1581,9 +1791,9 @@ function encodeWavFromInterleaved(interleaved, channelCount, sampleRate) {
   writeString(view, 12, 'fmt ');
   view.setUint32(16, 16, true);
   view.setUint16(20, 3, true);
-  view.setUint16(22, channelCount, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(22, safeChannelCount, true);
+  view.setUint32(24, normalizedSampleRate, true);
+  view.setUint32(28, normalizedSampleRate * blockAlign, true);
   view.setUint16(32, blockAlign, true);
   view.setUint16(34, bytesPerSample * 8, true);
   writeString(view, 36, 'data');
@@ -1603,12 +1813,6 @@ function writeString(view, offset, text) {
   for (let i = 0; i < text.length; i += 1) {
     view.setUint8(offset + i, text.charCodeAt(i));
   }
-}
-
-function createRecordingFilename(extension = 'wav') {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const ext = extension.startsWith('.') ? extension.slice(1) : extension;
-  return `seqroom-recording-${timestamp}.${ext}`;
 }
 
 function downloadBlob(blob, filename) {
@@ -1717,6 +1921,8 @@ function scheduleStep(stepNumber, when) {
     if (!instrument) {
       return;
     }
+
+    ensureLocalInstrumentCapacity(instrument, clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT)));
 
     const steps = instrument.steps || [];
     if (!steps.length) {
