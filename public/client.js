@@ -218,6 +218,7 @@ const audioState = {
 const AUDIO_LOOKAHEAD_MS = 25;
 const AUDIO_SCHEDULE_AHEAD_SECONDS = 0.18;
 const RECORDING_STATS_UPDATE_INTERVAL_MS = 200;
+const tempoInputState = { manualEditing: false };
 
 initialize();
 
@@ -279,7 +280,7 @@ function setupTempoControls() {
     tempoInputField.max = String(TEMPO_MAX);
     tempoInputField.step = '1';
 
-    const handleTempoInput = (rawValue, { enforce = false } = {}) => {
+    const handleTempoCommit = (rawValue, { enforceClamp = false } = {}) => {
       if (rawValue === '') {
         return;
       }
@@ -289,24 +290,51 @@ function setupTempoControls() {
       }
       if (numeric >= TEMPO_MIN && numeric <= TEMPO_MAX) {
         commitTempo(numeric);
-      } else if (enforce) {
-        const clamped = clampTempo(numeric);
-        commitTempo(clamped);
+      } else if (enforceClamp) {
+        commitTempo(numeric);
       }
     };
 
+    tempoInputField.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        if (tempoInputState.manualEditing) {
+          handleTempoCommit(event.target.value, { enforceClamp: true });
+          tempoInputState.manualEditing = false;
+          updateTempoDisplay(state.transport.bpm);
+        }
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        tempoInputState.manualEditing = false;
+        updateTempoDisplay(state.transport.bpm);
+        return;
+      }
+
+      const printable = event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
+      const editingKeys = ['Backspace', 'Delete'];
+      if (printable || editingKeys.includes(event.key)) {
+        tempoInputState.manualEditing = true;
+      }
+    });
+
     tempoInputField.addEventListener('input', (event) => {
       event.stopPropagation();
-      handleTempoInput(event.target.value);
+      if (!tempoInputState.manualEditing) {
+        handleTempoCommit(event.target.value, { enforceClamp: true });
+      }
     });
 
     tempoInputField.addEventListener('change', (event) => {
       event.stopPropagation();
-      handleTempoInput(event.target.value, { enforce: true });
+      if (!tempoInputState.manualEditing) {
+        handleTempoCommit(event.target.value, { enforceClamp: true });
+      }
       updateTempoDisplay(state.transport.bpm);
     });
 
     tempoInputField.addEventListener('blur', () => {
+      tempoInputState.manualEditing = false;
       updateTempoDisplay(state.transport.bpm);
     });
   }
@@ -797,6 +825,9 @@ function ensureInstrumentCard(instrument) {
       if (state.activeInstrumentId !== instrument.id) {
         setActiveInstrument(instrument.id);
       }
+      if (cardEntry.stepControl?.manualEditing) {
+        cardEntry.stepControl.manualEditing.editing = false;
+      }
       requestInstrumentStepCountChange(instrument.id, preset);
     });
     presetContainer.appendChild(button);
@@ -808,11 +839,21 @@ function ensureInstrumentCard(instrument) {
   node.insertBefore(controlsRow, cardEntry.paramsContainer);
 
   const instrumentId = instrument.id;
+  const getCurrentStepCount = () => {
+    const latest = state.instruments.get(instrumentId);
+    if (!latest) {
+      return STEP_COUNT;
+    }
+    const latestSteps = Array.isArray(latest.steps) ? latest.steps.length : STEP_COUNT;
+    return clampStepCount(latest.stepCount ?? latestSteps ?? STEP_COUNT);
+  };
+  const manualStepState = { editing: false };
   stepSlider.addEventListener('input', (event) => {
     event.stopPropagation();
     if (state.activeInstrumentId !== instrument.id) {
       setActiveInstrument(instrument.id);
     }
+    manualStepState.editing = false;
     const preview = clampStepCount(stepSlider.value);
     stepNumberInput.value = String(preview);
     stepValue.textContent = formatStepCountLabel(preview);
@@ -827,8 +868,42 @@ function ensureInstrumentCard(instrument) {
     if (state.activeInstrumentId !== instrument.id) {
       setActiveInstrument(instrument.id);
     }
+    manualStepState.editing = false;
     const desired = clampStepCount(stepSlider.value);
     requestInstrumentStepCountChange(instrumentId, desired);
+  });
+
+  stepNumberInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      if (manualStepState.editing) {
+        event.preventDefault();
+        if (stepNumberInput.value !== '') {
+          const desired = clampStepCount(stepNumberInput.value);
+          stepNumberInput.value = String(desired);
+          requestInstrumentStepCountChange(instrumentId, desired);
+        }
+        manualStepState.editing = false;
+        return;
+      }
+    }
+
+    if (event.key === 'Escape') {
+      manualStepState.editing = false;
+      const current = getCurrentStepCount();
+      stepNumberInput.value = String(current);
+      stepValue.textContent = formatStepCountLabel(current);
+      presetButtons.forEach((button) => {
+        const presetValue = Number(button.textContent);
+        button.classList.toggle('selected', presetValue === current);
+      });
+      return;
+    }
+
+    const printable = event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
+    const editingKeys = ['Backspace', 'Delete'];
+    if (printable || editingKeys.includes(event.key)) {
+      manualStepState.editing = true;
+    }
   });
 
   stepNumberInput.addEventListener('input', (event) => {
@@ -836,14 +911,11 @@ function ensureInstrumentCard(instrument) {
     if (state.activeInstrumentId !== instrument.id) {
       setActiveInstrument(instrument.id);
     }
-    if (stepNumberInput.value === '') {
-      return;
-    }
-    const desired = clampStepCount(stepNumberInput.value);
-    if (String(desired) !== stepNumberInput.value) {
+    if (!manualStepState.editing && stepNumberInput.value !== '') {
+      const desired = clampStepCount(stepNumberInput.value);
       stepNumberInput.value = String(desired);
+      requestInstrumentStepCountChange(instrumentId, desired);
     }
-    requestInstrumentStepCountChange(instrumentId, desired);
   });
 
   stepNumberInput.addEventListener('change', (event) => {
@@ -851,13 +923,36 @@ function ensureInstrumentCard(instrument) {
     if (state.activeInstrumentId !== instrument.id) {
       setActiveInstrument(instrument.id);
     }
+    if (manualStepState.editing) {
+      manualStepState.editing = false;
+      const current = getCurrentStepCount();
+      stepNumberInput.value = String(current);
+      stepValue.textContent = formatStepCountLabel(current);
+      presetButtons.forEach((button) => {
+        const presetValue = Number(button.textContent);
+        button.classList.toggle('selected', presetValue === current);
+      });
+      return;
+    }
     if (stepNumberInput.value === '') {
-      stepNumberInput.value = String(clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT)));
+      const current = getCurrentStepCount();
+      stepNumberInput.value = String(current);
       return;
     }
     const desired = clampStepCount(stepNumberInput.value);
     stepNumberInput.value = String(desired);
     requestInstrumentStepCountChange(instrumentId, desired);
+  });
+
+  stepNumberInput.addEventListener('blur', () => {
+    manualStepState.editing = false;
+    const current = getCurrentStepCount();
+    stepNumberInput.value = String(current);
+    stepValue.textContent = formatStepCountLabel(current);
+    presetButtons.forEach((button) => {
+      const presetValue = Number(button.textContent);
+      button.classList.toggle('selected', presetValue === current);
+    });
   });
 
   cardEntry.stepControl = {
@@ -866,6 +961,7 @@ function ensureInstrumentCard(instrument) {
     input: stepNumberInput,
     value: stepValue,
     presets: presetButtons,
+    manualEditing: manualStepState,
   };
 
   const drumSelector = document.createElement('div');
@@ -907,6 +1003,9 @@ function updateInstrumentCard(card, instrument) {
         const presetValue = Number(button.textContent);
         button.classList.toggle('selected', presetValue === stepCount);
       });
+    }
+    if (entry.stepControl.manualEditing) {
+      entry.stepControl.manualEditing.editing = false;
     }
   }
 
