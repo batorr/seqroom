@@ -14,6 +14,7 @@ const SynthTypes = Object.freeze({
   TB303: 'tb-303',
   TR808: 'tr-808',
   POLY: 'poly-synth',
+  SAMPLER: 'sampler',
 });
 
 const TR808_DRUMS = [
@@ -22,6 +23,19 @@ const TR808_DRUMS = [
   { id: 'hat', label: 'Hat', color: '#38bdf8' },
   { id: 'clap', label: 'Clap', color: '#c084fc' },
 ];
+
+const SAMPLER_SLOT_CONFIG = [
+  { id: 'A', label: 'Slot A', color: '#f97316' },
+  { id: 'B', label: 'Slot B', color: '#facc15' },
+  { id: 'C', label: 'Slot C', color: '#38bdf8' },
+  { id: 'D', label: 'Slot D', color: '#22c55e' },
+  { id: 'E', label: 'Slot E', color: '#a855f7' },
+  { id: 'F', label: 'Slot F', color: '#f472b6' },
+];
+
+const SAMPLER_SLOT_IDS = SAMPLER_SLOT_CONFIG.map((slot) => slot.id);
+const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
+const SAMPLER_ALLOWED_MIME_TYPES = ['audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3'];
 
 function hexToRgba(hex, alpha = 1) {
   if (typeof hex !== 'string') {
@@ -76,7 +90,14 @@ function ensureLocalInstrumentCapacity(instrument, stepCount) {
     instrument.steps = [];
   }
   while (instrument.steps.length < desired) {
-    const template = instrument.type === SynthTypes.TR808 ? createEmptyDrumStep() : createEmptyMelodicStep();
+    let template;
+    if (instrument.type === SynthTypes.TR808) {
+      template = createEmptyDrumStep();
+    } else if (instrument.type === SynthTypes.SAMPLER) {
+      template = createEmptySamplerStep();
+    } else {
+      template = createEmptyMelodicStep();
+    }
     instrument.steps.push(template);
   }
 }
@@ -139,6 +160,12 @@ const INSTRUMENT_LIBRARY = {
         { value: 'square', label: 'Square' },
       ]),
     ],
+  },
+  [SynthTypes.SAMPLER]: {
+    label: 'Sampler',
+    typeLabel: 'Sampler',
+    toneClass: 'tone-sampler',
+    params: [],
   },
 };
 
@@ -213,6 +240,8 @@ const audioState = {
   recordingByteLength: 0,
   recordingStatsLastUpdate: 0,
   recordingModuleLoaded: false,
+  samplerBuffers: new Map(),
+  pendingSamplerLoads: new Map(),
 };
 
 const AUDIO_LOOKAHEAD_MS = 25;
@@ -455,20 +484,25 @@ function setupSocketEvents() {
   });
 
   socket.on('instrument:added', (instrument) => {
-    state.instruments.set(instrument.id, normalizeInstrument(instrument));
-    if (!state.instrumentOrder.includes(instrument.id)) {
-      state.instrumentOrder.push(instrument.id);
+    const normalized = normalizeInstrument(instrument);
+    state.instruments.set(normalized.id, normalized);
+    prepareSamplerAudio(normalized);
+    if (!state.instrumentOrder.includes(normalized.id)) {
+      state.instrumentOrder.push(normalized.id);
     }
     renderInstruments();
-    setActiveInstrument(instrument.id);
+    setActiveInstrument(normalized.id);
   });
 
   socket.on('instrument:update', (instrument) => {
-    state.instruments.set(instrument.id, normalizeInstrument(instrument));
-    renderInstrument(instrument.id);
+    const normalized = normalizeInstrument(instrument);
+    state.instruments.set(normalized.id, normalized);
+    prepareSamplerAudio(normalized);
+    renderInstrument(normalized.id);
   });
 
   socket.on('instrument:removed', ({ instrumentId }) => {
+    cleanupSamplerBuffers(instrumentId);
     state.instruments.delete(instrumentId);
     state.instrumentOrder = state.instrumentOrder.filter((id) => id !== instrumentId);
     const wasActive = state.activeInstrumentId === instrumentId;
@@ -578,7 +612,9 @@ function hydrateState(payload) {
 
   state.instruments.clear();
   (payload.instruments || []).forEach((instrument) => {
-    state.instruments.set(instrument.id, normalizeInstrument(instrument));
+    const normalized = normalizeInstrument(instrument);
+    state.instruments.set(normalized.id, normalized);
+    prepareSamplerAudio(normalized);
   });
   state.instrumentOrder = (payload.instrumentOrder || []).filter((id) => state.instruments.has(id));
   if (!state.instrumentOrder.length && state.instruments.size) {
@@ -782,11 +818,12 @@ function ensureInstrumentCard(instrument) {
     root: node,
     paramsContainer: node.querySelector('.synth-params'),
     stepGrid: node.querySelector('.step-grid'),
-    stepRefs: [],
-    drumSelector: null,
-    activeDrum: 'kick',
-    stepControl: null,
-  };
+  stepRefs: [],
+  drumSelector: null,
+  activeDrum: 'kick',
+  activeSamplerSlot: SAMPLER_SLOT_IDS[0],
+  stepControl: null,
+};
 
   const controlsRow = document.createElement('div');
   controlsRow.className = 'instrument-controls';
@@ -978,7 +1015,7 @@ function updateInstrumentCard(card, instrument) {
   const entry = instrumentElements.get(instrument.id);
   const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
   card.dataset.instrumentId = instrument.id;
-  card.classList.remove('tone-acid', 'tone-808', 'tone-poly');
+  card.classList.remove('tone-acid', 'tone-808', 'tone-poly', 'tone-sampler');
   if (definition.toneClass) {
     card.classList.add(definition.toneClass);
   }
@@ -1016,6 +1053,12 @@ function updateInstrumentCard(card, instrument) {
         entry.activeDrum = TR808_DRUMS[0].id;
       }
       renderDrumSelector(entry, instrument);
+    } else if (instrument.type === SynthTypes.SAMPLER) {
+      entry.drumSelector.classList.remove('hidden');
+      if (!entry.activeSamplerSlot || !SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)) {
+        entry.activeSamplerSlot = SAMPLER_SLOT_IDS[0];
+      }
+      renderSamplerSelector(entry, instrument, definition);
     } else {
       entry.drumSelector.classList.add('hidden');
     }
@@ -1054,8 +1097,564 @@ function renderDrumSelector(entry, instrument) {
   });
 }
 
+function renderSamplerSelector(entry, instrument, definition) {
+  const container = entry.drumSelector;
+  container.innerHTML = '';
+  const slots = instrument.params?.slots || {};
+  const activeSlot = entry.activeSamplerSlot && SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)
+    ? entry.activeSamplerSlot
+    : SAMPLER_SLOT_IDS[0];
+  entry.activeSamplerSlot = activeSlot;
+
+  SAMPLER_SLOT_CONFIG.forEach((slotConfig) => {
+    const slotId = slotConfig.id;
+    const slotState = slots[slotId] || createDefaultSamplerSlot(slotId);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'sampler-slot';
+    wrapper.dataset.slotId = slotId;
+    wrapper.style.setProperty('--sampler-color', slotConfig.color);
+    if (slotId === activeSlot) {
+      wrapper.classList.add('active');
+    }
+
+    const selectBtn = document.createElement('button');
+    selectBtn.type = 'button';
+    selectBtn.className = 'drum-button sampler-slot-button';
+    selectBtn.textContent = slotId;
+    if (slotId === activeSlot) {
+      selectBtn.classList.add('active');
+    }
+    selectBtn.addEventListener('click', () => {
+      if (entry.activeSamplerSlot === slotId) {
+        return;
+      }
+      entry.activeSamplerSlot = slotId;
+      renderSamplerSelector(entry, instrument, definition);
+      renderParamControls(entry.paramsContainer, instrument, definition);
+      renderStepGrid(entry.stepGrid, instrument);
+      updatePlaybackIndicators(getCurrentStepIndex());
+    });
+
+    const infoLabel = document.createElement('span');
+    infoLabel.className = 'sampler-slot-info';
+    infoLabel.textContent = slotState.sample?.name || 'Drop WAV/MP3';
+
+    const actions = document.createElement('div');
+    actions.className = 'sampler-slot-actions';
+
+    const uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'subtle sampler-upload-button';
+    uploadBtn.textContent = slotState.sample ? 'Replace' : 'Upload';
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = SAMPLER_ALLOWED_MIME_TYPES.join(',');
+    fileInput.className = 'sampler-slot-file-input';
+    fileInput.addEventListener('change', () => {
+      const [file] = fileInput.files || [];
+      if (file) {
+        handleSamplerFileUpload(instrument.id, slotId, file);
+      }
+      fileInput.value = '';
+    });
+
+    uploadBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    actions.appendChild(uploadBtn);
+
+    if (slotState.sample) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'subtle sampler-clear-button';
+      clearBtn.textContent = 'Clear';
+      clearBtn.addEventListener('click', () => {
+        handleSamplerSampleClear(instrument.id, slotId);
+      });
+      actions.appendChild(clearBtn);
+    }
+
+    wrapper.appendChild(selectBtn);
+    wrapper.appendChild(infoLabel);
+    wrapper.appendChild(actions);
+    wrapper.appendChild(fileInput);
+
+    enableSamplerSlotDrop(wrapper, instrument.id, slotId, infoLabel);
+
+    container.appendChild(wrapper);
+  });
+}
+
+function renderSamplerParamControls(container, instrument) {
+  const entry = instrumentElements.get(instrument.id);
+  if (!entry) {
+    container.textContent = 'Sampler unavailable.';
+    return;
+  }
+
+  const slotId = entry.activeSamplerSlot && SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)
+    ? entry.activeSamplerSlot
+    : SAMPLER_SLOT_IDS[0];
+  entry.activeSamplerSlot = slotId;
+  const slot = instrument.params?.slots?.[slotId] || createDefaultSamplerSlot(slotId);
+
+  const header = document.createElement('div');
+  header.className = 'sampler-params-header';
+  header.textContent = `Slot ${slotId}`;
+  container.appendChild(header);
+
+  const sampleStatus = document.createElement('div');
+  sampleStatus.className = 'sampler-sample-status';
+  if (slot.sample) {
+    const sizeLabel = typeof slot.sample.bytesLength === 'number' ? ` · ${formatBytes(slot.sample.bytesLength)}` : '';
+    sampleStatus.textContent = `Sample: ${slot.sample.name}${sizeLabel}`;
+  } else {
+    sampleStatus.textContent = 'No sample loaded.';
+  }
+  container.appendChild(sampleStatus);
+
+  appendSamplerRangeControl(container, instrument.id, slotId, {
+    key: 'volume',
+    label: 'Volume',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    value: clampValue(slot.volume ?? 1, 0, 1),
+    format: (value) => value.toFixed(2),
+  });
+
+  appendSamplerRangeControl(container, instrument.id, slotId, {
+    key: 'pan',
+    label: 'Pan',
+    min: -1,
+    max: 1,
+    step: 0.01,
+    value: clampValue(slot.pan ?? 0, -1, 1),
+    format: (value) => value.toFixed(2),
+  });
+
+  appendSamplerRangeControl(container, instrument.id, slotId, {
+    key: 'pitch',
+    label: 'Pitch (semitones)',
+    min: -24,
+    max: 24,
+    step: 0.1,
+    value: clampValue(slot.pitch ?? 0, -24, 24),
+    format: (value) => `${value >= 0 ? '+' : ''}${value.toFixed(1)}`,
+  });
+
+  const startControl = appendSamplerRangeControl(container, instrument.id, slotId, {
+    key: 'startOffset',
+    label: 'Start Offset',
+    min: 0,
+    max: 0.99,
+    step: 0.01,
+    value: clampValue(slot.startOffset ?? 0, 0, 0.99),
+    format: (value) => `${Math.round(value * 100)}%`,
+  });
+  const endControl = appendSamplerRangeControl(container, instrument.id, slotId, {
+    key: 'endOffset',
+    label: 'End Offset',
+    min: 0.01,
+    max: 1,
+    step: 0.01,
+    value: clampValue(slot.endOffset ?? 1, 0.01, 1),
+    format: (value) => `${Math.round(value * 100)}%`,
+  });
+
+  startControl.onCommit = (rawValue) => {
+    let value = clampValue(rawValue, 0, 0.99);
+    const endValue = clampValue(Number(endControl.input.value), 0.01, 1);
+    if (value >= endValue - 0.01) {
+      value = clampValue(endValue - 0.01, 0, 0.99);
+      startControl.input.value = value.toFixed(2);
+      startControl.badge.textContent = `${Math.round(value * 100)}%`;
+    }
+    updateSamplerSlotLocal(instrument.id, slotId, { startOffset: value });
+    emitSamplerParamUpdate(instrument.id, slotId, { startOffset: value });
+  };
+
+  endControl.onCommit = (rawValue) => {
+    let value = clampValue(rawValue, 0.01, 1);
+    const startValue = clampValue(Number(startControl.input.value), 0, 0.99);
+    if (value <= startValue + 0.01) {
+      value = clampValue(startValue + 0.01, 0.01, 1);
+      endControl.input.value = value.toFixed(2);
+      endControl.badge.textContent = `${Math.round(value * 100)}%`;
+    }
+    updateSamplerSlotLocal(instrument.id, slotId, { endOffset: value });
+    emitSamplerParamUpdate(instrument.id, slotId, { endOffset: value });
+  };
+
+  appendSamplerToggleControl(container, instrument.id, slotId, {
+    key: 'reverse',
+    label: 'Reverse Playback',
+    value: Boolean(slot.reverse),
+  });
+
+  appendSamplerToggleControl(container, instrument.id, slotId, {
+    key: 'mute',
+    label: 'Mute Slot',
+    value: Boolean(slot.mute),
+  });
+}
+
+function renderSamplerStepGrid(container, instrument) {
+  container.innerHTML = '';
+  const steps = instrument.steps || [];
+  const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
+  const visibleSteps = getVisibleStepSlots(instrumentStepCount);
+  const entry = instrumentElements.get(instrument.id);
+  if (!entry) {
+    return;
+  }
+  const activeSlot = entry.activeSamplerSlot && SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)
+    ? entry.activeSamplerSlot
+    : SAMPLER_SLOT_IDS[0];
+  const slotMeta = SAMPLER_SLOT_CONFIG.find((slot) => slot.id === activeSlot) || SAMPLER_SLOT_CONFIG[0];
+  const stepRefs = [];
+
+  for (let i = 0; i < visibleSteps; i += 1) {
+    const patternIndex = i;
+    const withinPattern = patternIndex < instrumentStepCount;
+    const base = createEmptySamplerStep();
+    const existing = steps[patternIndex] ? normalizeSamplerStep(steps[patternIndex]) : base;
+    if (!steps[patternIndex]) {
+      steps[patternIndex] = existing;
+    }
+
+    const isActive = withinPattern && Boolean(existing.slots[activeSlot]);
+    const cell = document.createElement('div');
+    cell.className = 'step-cell sampler-cell';
+    cell.classList.toggle('active', isActive);
+    cell.classList.toggle('step-disabled', !withinPattern);
+    cell.style.setProperty('--sampler-color', slotMeta.color);
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'step-toggle sampler-step-toggle';
+    toggleBtn.dataset.stepIndex = String(patternIndex);
+    toggleBtn.disabled = !withinPattern;
+
+    const indicator = document.createElement('span');
+    indicator.className = 'sampler-indicator';
+    indicator.style.setProperty('--sampler-color', slotMeta.color);
+    indicator.classList.toggle('active', isActive);
+
+    const indexLabel = document.createElement('span');
+    indexLabel.className = 'step-index';
+    indexLabel.textContent = formatStepIndex(i, visibleSteps);
+
+    toggleBtn.appendChild(indicator);
+    toggleBtn.appendChild(indexLabel);
+
+    toggleBtn.addEventListener('click', () => {
+      if (!withinPattern) {
+        return;
+      }
+      const nextValue = !existing.slots[activeSlot];
+      existing.slots[activeSlot] = nextValue;
+      existing.active = Object.values(existing.slots).some(Boolean);
+      indicator.classList.toggle('active', nextValue);
+      cell.classList.toggle('active', nextValue);
+      socket.emit('instrument:step', {
+        instrumentId: instrument.id,
+        stepIndex: patternIndex,
+        slot: activeSlot,
+        value: nextValue,
+      });
+    });
+
+    cell.appendChild(toggleBtn);
+    container.appendChild(cell);
+    stepRefs.push({ cell, toggleBtn, indicator, disabled: !withinPattern });
+  }
+
+  entry.stepRefs = stepRefs;
+}
+
+function appendSamplerRangeControl(container, instrumentId, slotId, options) {
+  const {
+    key,
+    label,
+    min,
+    max,
+    step,
+    value,
+    format,
+  } = options;
+
+  const control = document.createElement('div');
+  control.className = 'param-control sampler-param-control';
+
+  const labelEl = document.createElement('label');
+  labelEl.textContent = label;
+  control.appendChild(labelEl);
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  control.appendChild(input);
+
+  const badge = document.createElement('span');
+  badge.className = 'param-value';
+  badge.textContent = format(value);
+  control.appendChild(badge);
+
+  const api = {
+    input,
+    badge,
+    onCommit: null,
+  };
+
+  input.addEventListener('input', () => {
+    const parsed = clampValue(Number(input.value), min, max);
+    badge.textContent = format(parsed);
+  });
+
+  input.addEventListener('change', () => {
+    const parsed = clampValue(Number(input.value), min, max);
+    badge.textContent = format(parsed);
+    if (typeof api.onCommit === 'function') {
+      api.onCommit(parsed);
+    } else {
+      updateSamplerSlotLocal(instrumentId, slotId, { [key]: parsed });
+      emitSamplerParamUpdate(instrumentId, slotId, { [key]: parsed });
+    }
+  });
+
+  container.appendChild(control);
+  return api;
+}
+
+function appendSamplerToggleControl(container, instrumentId, slotId, options) {
+  const { key, label, value } = options;
+  const control = document.createElement('div');
+  control.className = 'param-control sampler-toggle-control';
+
+  const labelEl = document.createElement('label');
+  labelEl.className = 'sampler-toggle-label';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = Boolean(value);
+  checkbox.addEventListener('change', () => {
+    const next = Boolean(checkbox.checked);
+    updateSamplerSlotLocal(instrumentId, slotId, { [key]: next });
+    emitSamplerParamUpdate(instrumentId, slotId, { [key]: next });
+  });
+
+  labelEl.appendChild(checkbox);
+  const text = document.createElement('span');
+  text.textContent = ` ${label}`;
+  labelEl.appendChild(text);
+
+  control.appendChild(labelEl);
+  container.appendChild(control);
+}
+
+function updateSamplerSlotLocal(instrumentId, slotId, updates) {
+  const instrument = state.instruments.get(instrumentId);
+  if (!instrument || instrument.type !== SynthTypes.SAMPLER) {
+    return null;
+  }
+  if (!instrument.params || typeof instrument.params !== 'object') {
+    instrument.params = { slots: {} };
+  }
+  if (!instrument.params.slots) {
+    instrument.params.slots = {};
+  }
+  if (!instrument.params.slots[slotId]) {
+    instrument.params.slots[slotId] = createDefaultSamplerSlot(slotId);
+  }
+  const slot = instrument.params.slots[slotId];
+  Object.entries(updates || {}).forEach(([key, value]) => {
+    if (key === 'sample') {
+      slot.sample = value ? { ...value } : null;
+    } else {
+      slot[key] = value;
+    }
+  });
+  return slot;
+}
+
+function emitSamplerParamUpdate(instrumentId, slotId, updates) {
+  if (!instrumentId || !slotId || !updates || typeof updates !== 'object') {
+    return;
+  }
+  if (!state.isInRoom) {
+    return;
+  }
+  socket.emit('instrument:param', {
+    instrumentId,
+    params: {
+      slots: {
+        [slotId]: updates,
+      },
+    },
+  });
+}
+
+function handleSamplerFileUpload(instrumentId, slotId, file) {
+  if (!validateSamplerFile(file)) {
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = reader.result;
+    if (!(result instanceof ArrayBuffer)) {
+      window.alert('Unable to read the selected audio file.');
+      return;
+    }
+    const base64 = arrayBufferToBase64(result);
+    const sampleMeta = {
+      name: file.name,
+      mimeType: file.type || 'audio/wav',
+      data: base64,
+      bytesLength: file.size,
+      updatedAt: Date.now(),
+    };
+    updateSamplerSlotLocal(instrumentId, slotId, { sample: sampleMeta });
+    const instrument = state.instruments.get(instrumentId);
+    if (instrument) {
+      prepareSamplerAudio(instrument);
+      renderInstrument(instrumentId);
+    }
+    emitSamplerParamUpdate(instrumentId, slotId, { sample: sampleMeta });
+  };
+  reader.onerror = () => {
+    window.alert('Failed to read the selected audio file.');
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function handleSamplerSampleClear(instrumentId, slotId) {
+  updateSamplerSlotLocal(instrumentId, slotId, { sample: null });
+  const key = samplerSlotKey(instrumentId, slotId);
+  audioState.samplerBuffers.delete(key);
+  audioState.pendingSamplerLoads.delete(key);
+  renderInstrument(instrumentId);
+  emitSamplerParamUpdate(instrumentId, slotId, { sample: null });
+}
+
+function enableSamplerSlotDrop(target, instrumentId, slotId, infoLabel) {
+  const highlight = () => target.classList.add('drag-over');
+  const clearHighlight = () => target.classList.remove('drag-over');
+
+  target.addEventListener('dragenter', (event) => {
+    event.preventDefault();
+    highlight();
+  });
+  target.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  });
+  target.addEventListener('dragleave', () => {
+    clearHighlight();
+  });
+  target.addEventListener('dragend', () => {
+    clearHighlight();
+  });
+  target.addEventListener('drop', (event) => {
+    event.preventDefault();
+    clearHighlight();
+    const files = event.dataTransfer?.files;
+    if (!files || !files.length) {
+      return;
+    }
+    const file = files[0];
+    if (!file) {
+      return;
+    }
+    if (!validateSamplerFile(file)) {
+      return;
+    }
+    handleSamplerFileUpload(instrumentId, slotId, file);
+  });
+
+  if (infoLabel) {
+    target.addEventListener('dragenter', () => {
+      infoLabel.dataset.previousText = infoLabel.textContent || '';
+      infoLabel.textContent = 'Release to upload';
+    });
+    target.addEventListener('dragleave', () => {
+      if (infoLabel.dataset.previousText) {
+        infoLabel.textContent = infoLabel.dataset.previousText;
+        delete infoLabel.dataset.previousText;
+      }
+    });
+    target.addEventListener('drop', () => {
+      if (infoLabel.dataset.previousText) {
+        infoLabel.textContent = infoLabel.dataset.previousText;
+        delete infoLabel.dataset.previousText;
+      }
+    });
+  }
+}
+
+function validateSamplerFile(file) {
+  if (!file) {
+    return false;
+  }
+  if (file.size > SAMPLER_MAX_SAMPLE_BYTES) {
+    const limitMb = (SAMPLER_MAX_SAMPLE_BYTES / (1024 * 1024)).toFixed(1);
+    window.alert(`Please choose a file smaller than ${limitMb} MB.`);
+    return false;
+  }
+  if (file.type) {
+    if (!SAMPLER_ALLOWED_MIME_TYPES.includes(file.type)) {
+      window.alert('Unsupported audio format. Please use WAV or MP3 files.');
+      return false;
+    }
+  } else {
+    const extension = (file.name || '').toLowerCase().split('.').pop();
+    if (!['wav', 'mp3'].includes(extension)) {
+      window.alert('Unsupported audio format. Please use WAV or MP3 files.');
+      return false;
+    }
+  }
+  return true;
+}
+
+function arrayBufferToBase64(buffer) {
+  if (!(buffer instanceof ArrayBuffer)) {
+    return '';
+  }
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return window.btoa(binary);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function renderParamControls(container, instrument, definition) {
   container.innerHTML = '';
+  if (instrument.type === SynthTypes.SAMPLER) {
+    renderSamplerParamControls(container, instrument, definition);
+    return;
+  }
   (definition.params || []).forEach((paramDef) => {
     const control = document.createElement('div');
     control.className = 'param-control';
@@ -1163,6 +1762,8 @@ function createInstrumentParamUpdate(instrument, paramDef, value) {
 function renderStepGrid(container, instrument) {
   if (instrument.type === SynthTypes.TR808) {
     renderDrumStepGrid(container, instrument);
+  } else if (instrument.type === SynthTypes.SAMPLER) {
+    renderSamplerStepGrid(container, instrument);
   } else {
     renderMelodicStepGrid(container, instrument);
   }
@@ -1486,6 +2087,8 @@ function leaveRoom() {
   state.instruments.clear();
   state.instrumentOrder = [];
   state.activeInstrumentId = null;
+  audioState.samplerBuffers.clear();
+  audioState.pendingSamplerLoads.clear();
   renderInstruments();
   transportToggleBtn.disabled = true;
   transportToggleBtn.classList.remove('playing');
@@ -1510,6 +2113,8 @@ socket.on('disconnect', () => {
   state.instruments.clear();
   state.instrumentOrder = [];
   state.activeInstrumentId = null;
+  audioState.samplerBuffers.clear();
+  audioState.pendingSamplerLoads.clear();
   renderInstruments();
   transportToggleBtn.disabled = true;
   transportToggleBtn.classList.remove('playing');
@@ -1590,6 +2195,12 @@ function ensureAudioContext() {
 
     audioState.context = ctx;
     audioState.masterGain = master;
+
+    state.instruments.forEach((instrument) => {
+      if (instrument.type === SynthTypes.SAMPLER) {
+        prepareSamplerAudio(instrument);
+      }
+    });
 
     return ctx;
   } catch (error) {
@@ -2056,6 +2667,9 @@ function scheduleInstrumentStep(instrument, step, when) {
     case SynthTypes.TR808:
       scheduleTR808(instrument, step, when, ctx);
       break;
+    case SynthTypes.SAMPLER:
+      scheduleSampler(instrument, step, when, ctx);
+      break;
     case SynthTypes.POLY:
     default:
       schedulePolySynth(instrument, step, when, ctx);
@@ -2107,6 +2721,75 @@ function scheduleTR808(instrument, step, when, ctx) {
   if (layers.clap) {
     scheduleClap(params, when, ctx);
   }
+}
+
+function scheduleSampler(instrument, step, when, ctx) {
+  const slotParamsMap = instrument.params?.slots || {};
+  const stepSlots = step.slots || {};
+
+  SAMPLER_SLOT_IDS.forEach((slotId) => {
+    if (!stepSlots[slotId]) {
+      return;
+    }
+
+    const slotParams = slotParamsMap[slotId];
+    if (!slotParams || slotParams.mute) {
+      return;
+    }
+
+    const cacheEntry = audioState.samplerBuffers.get(samplerSlotKey(instrument.id, slotId));
+    if (!cacheEntry || !cacheEntry.buffer) {
+      return;
+    }
+
+    const buffer = slotParams.reverse && cacheEntry.reversedBuffer ? cacheEntry.reversedBuffer : cacheEntry.buffer;
+    const sampleDuration = buffer.duration;
+    if (!Number.isFinite(sampleDuration) || sampleDuration <= 0) {
+      return;
+    }
+
+    const startOffset = clampValue(slotParams.startOffset ?? 0, 0, 0.99);
+    const endOffset = clampValue(slotParams.endOffset ?? 1, 0.01, 1);
+    if (endOffset <= startOffset) {
+      return;
+    }
+
+    const segmentLength = Math.max(0.01, sampleDuration * (endOffset - startOffset));
+    const offsetSeconds = slotParams.reverse && cacheEntry.reversedBuffer
+      ? Math.max(0, sampleDuration * (1 - endOffset))
+      : sampleDuration * startOffset;
+    const availableDuration = Math.max(0.01, sampleDuration - offsetSeconds);
+    const playbackDuration = Math.min(segmentLength, availableDuration);
+    if (!Number.isFinite(playbackDuration) || playbackDuration <= 0) {
+      return;
+    }
+
+    const playbackRate = Math.pow(2, clampValue(slotParams.pitch ?? 0, -24, 24) / 12);
+    const volume = clampValue(slotParams.volume ?? 1, 0, 1);
+    const panValue = clampValue(slotParams.pan ?? 0, -1, 1);
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.setValueAtTime(playbackRate, when);
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.setValueAtTime(volume, when);
+
+    source.connect(gainNode);
+
+    if (typeof ctx.createStereoPanner === 'function') {
+      const panner = ctx.createStereoPanner();
+      panner.pan.setValueAtTime(panValue, when);
+      gainNode.connect(panner);
+      panner.connect(audioState.masterGain);
+    } else {
+      gainNode.connect(audioState.masterGain);
+    }
+
+    const startTime = Math.max(0, offsetSeconds);
+    const duration = Math.max(0.01, playbackDuration);
+    source.start(when, startTime, duration);
+  });
 }
 
 function scheduleKick(params, when, ctx) {
@@ -2240,6 +2923,112 @@ function schedulePolySynth(instrument, step, when, ctx) {
   osc.stop(when + attack + decay + release + 0.1);
 }
 
+function samplerSlotKey(instrumentId, slotId) {
+  return `${instrumentId}:${slotId}`;
+}
+
+function prepareSamplerAudio(instrument) {
+  if (!instrument || instrument.type !== SynthTypes.SAMPLER) {
+    return;
+  }
+  const ctx = ensureAudioContext();
+  if (!ctx) {
+    return;
+  }
+  const slots = instrument.params?.slots || {};
+  SAMPLER_SLOT_IDS.forEach((slotId) => {
+    const slot = slots[slotId];
+    const key = samplerSlotKey(instrument.id, slotId);
+    if (!slot || !slot.sample) {
+      audioState.samplerBuffers.delete(key);
+      audioState.pendingSamplerLoads.delete(key);
+      return;
+    }
+    const cached = audioState.samplerBuffers.get(key);
+    if (cached && cached.meta && cached.meta.data === slot.sample.data && cached.meta.updatedAt === slot.sample.updatedAt) {
+      return;
+    }
+    loadSamplerSlotSample(ctx, instrument.id, slotId, slot.sample);
+  });
+}
+
+function loadSamplerSlotSample(ctx, instrumentId, slotId, sample) {
+  if (!sample || typeof sample !== 'object' || typeof sample.data !== 'string') {
+    return;
+  }
+  const arrayBuffer = base64ToArrayBuffer(sample.data);
+  if (!arrayBuffer) {
+    console.warn('Sampler: unable to decode audio data.');
+    return;
+  }
+  const key = samplerSlotKey(instrumentId, slotId);
+  const version = `${sample.updatedAt || Date.now()}:${sample.data.length}`;
+  audioState.pendingSamplerLoads.set(key, version);
+
+  ctx.decodeAudioData(arrayBuffer.slice(0)).then((audioBuffer) => {
+    if (audioState.pendingSamplerLoads.get(key) !== version) {
+      return;
+    }
+    const reversedBuffer = createReversedAudioBuffer(ctx, audioBuffer);
+    audioState.samplerBuffers.set(key, {
+      buffer: audioBuffer,
+      reversedBuffer,
+      meta: { ...sample },
+    });
+    audioState.pendingSamplerLoads.delete(key);
+  }).catch((error) => {
+    if (audioState.pendingSamplerLoads.get(key) === version) {
+      audioState.pendingSamplerLoads.delete(key);
+    }
+    console.error('Sampler: failed to decode sample', error);
+  });
+}
+
+function base64ToArrayBuffer(base64) {
+  if (typeof base64 !== 'string' || !base64.length) {
+    return null;
+  }
+  try {
+    const binary = window.atob(base64);
+    const length = binary.length;
+    const bytes = new Uint8Array(length);
+    for (let index = 0; index < length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes.buffer;
+  } catch (error) {
+    console.error('Sampler: invalid base64 audio data', error);
+    return null;
+  }
+}
+
+function createReversedAudioBuffer(ctx, buffer) {
+  const reversed = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const source = buffer.getChannelData(channel);
+    const target = reversed.getChannelData(channel);
+    const lastIndex = source.length - 1;
+    for (let i = 0; i < source.length; i += 1) {
+      target[i] = source[lastIndex - i];
+    }
+  }
+  return reversed;
+}
+
+function cleanupSamplerBuffers(instrumentId) {
+  const prefix = `${instrumentId}:`;
+  Array.from(audioState.samplerBuffers.keys()).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      audioState.samplerBuffers.delete(key);
+    }
+  });
+  Array.from(audioState.pendingSamplerLoads.keys()).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      audioState.pendingSamplerLoads.delete(key);
+    }
+  });
+}
+
 let noiseBuffer = null;
 
 function createNoiseBuffer(ctx) {
@@ -2333,34 +3122,104 @@ function selectParam(key, label, options) {
   return { type: 'select', key, label, options };
 }
 
+function normalizeSamplerSample(sample) {
+  if (!sample || typeof sample !== 'object') {
+    return null;
+  }
+  if (typeof sample.data !== 'string' || !sample.data.length) {
+    return null;
+  }
+  const normalized = {
+    name: typeof sample.name === 'string' && sample.name.trim() ? sample.name.trim().slice(0, 120) : 'Sample',
+    mimeType: typeof sample.mimeType === 'string' && sample.mimeType.trim() ? sample.mimeType.trim().slice(0, 64) : 'audio/wav',
+    data: sample.data,
+    bytesLength: Number.isFinite(sample.bytesLength) ? Number(sample.bytesLength) : undefined,
+    updatedAt: Number.isFinite(sample.updatedAt) ? Number(sample.updatedAt) : Date.now(),
+  };
+  return normalized;
+}
+
+function normalizeSamplerParams(params = {}) {
+  const slots = {};
+  SAMPLER_SLOT_IDS.forEach((slotId) => {
+    const defaults = createDefaultSamplerSlot(slotId);
+    const source = params?.slots?.[slotId] || params[slotId] || {};
+    const normalized = {
+      id: slotId,
+      name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 64) : defaults.name,
+      volume: clampValue(source.volume ?? defaults.volume, 0, 1),
+      pan: clampValue(source.pan ?? defaults.pan, -1, 1),
+      pitch: clampValue(source.pitch ?? defaults.pitch, -24, 24),
+      startOffset: clampValue(source.startOffset ?? defaults.startOffset, 0, 0.99),
+      endOffset: clampValue(source.endOffset ?? defaults.endOffset, 0.01, 1),
+      reverse: Boolean(source.reverse),
+      mute: Boolean(source.mute),
+      sample: normalizeSamplerSample(source.sample),
+    };
+    if (normalized.endOffset <= normalized.startOffset) {
+      normalized.endOffset = Math.min(1, normalized.startOffset + 0.05);
+    }
+    normalized.startOffset = clampValue(normalized.startOffset, 0, Math.max(0, normalized.endOffset - 0.01));
+    normalized.endOffset = clampValue(normalized.endOffset, normalized.startOffset + 0.01, 1);
+    slots[slotId] = normalized;
+  });
+  return { slots };
+}
+
+function normalizeSamplerStep(step) {
+  const base = createEmptySamplerStep();
+  const slots = { ...base.slots, ...(step?.slots || {}) };
+  const normalized = {
+    ...base,
+    ...step,
+    slots,
+  };
+  normalized.active = Object.values(slots).some(Boolean);
+  return normalized;
+}
+
 function normalizeInstrument(instrument) {
   const rawSteps = Array.isArray(instrument.steps) ? instrument.steps : [];
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? rawSteps.length ?? STEP_COUNT);
 
   const normalizedSteps = rawSteps.map((step) => {
-    const cloned = {
-      ...step,
-      layers: step?.layers ? { ...step.layers } : undefined,
-    };
     if (instrument.type === SynthTypes.TR808) {
       const base = createEmptyDrumStep();
-      cloned.layers = { ...base.layers, ...(cloned.layers || {}) };
-      cloned.active = TR808_DRUMS.some((drum) => cloned.layers[drum.id]);
+      const layers = { ...base.layers, ...(step?.layers || {}) };
+      return {
+        ...base,
+        ...step,
+        layers,
+        active: TR808_DRUMS.some((drum) => layers[drum.id]),
+      };
     }
-    return cloned;
+    if (instrument.type === SynthTypes.SAMPLER) {
+      return normalizeSamplerStep(step);
+    }
+    return {
+      ...step,
+    };
   });
 
   while (normalizedSteps.length < normalizedStepCount) {
-    const template = instrument.type === SynthTypes.TR808 ? createEmptyDrumStep() : createEmptyMelodicStep();
-    normalizedSteps.push(template);
+    const template = instrument.type === SynthTypes.TR808
+      ? createEmptyDrumStep()
+      : instrument.type === SynthTypes.SAMPLER
+        ? createEmptySamplerStep()
+        : createEmptyMelodicStep();
+    normalizedSteps.push({ ...template });
   }
+
+  const normalizedParams = instrument.type === SynthTypes.SAMPLER
+    ? normalizeSamplerParams(instrument.params)
+    : { ...instrument.params };
 
   return {
     id: instrument.id,
     type: instrument.type,
     name: instrument.name,
     createdAt: instrument.createdAt,
-    params: { ...instrument.params },
+    params: normalizedParams,
     stepCount: normalizedStepCount,
     steps: normalizedSteps,
   };
@@ -2413,6 +3272,22 @@ function createPitchSelect(selected) {
   return select;
 }
 
+function createDefaultSamplerSlot(slotId) {
+  const slotMeta = SAMPLER_SLOT_CONFIG.find((slot) => slot.id === slotId);
+  return {
+    id: slotId,
+    name: slotMeta ? slotMeta.label : `Slot ${slotId}`,
+    volume: 1,
+    pan: 0,
+    pitch: 0,
+    startOffset: 0,
+    endOffset: 1,
+    reverse: false,
+    mute: false,
+    sample: null,
+  };
+}
+
 function createEmptyMelodicStep() {
   return {
     active: false,
@@ -2427,6 +3302,16 @@ function createEmptyDrumStep() {
   return {
     layers: TR808_DRUMS.reduce((acc, drum) => {
       acc[drum.id] = false;
+      return acc;
+    }, {}),
+    active: false,
+  };
+}
+
+function createEmptySamplerStep() {
+  return {
+    slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
+      acc[slotId] = false;
       return acc;
     }, {}),
     active: false,

@@ -20,7 +20,11 @@ const SynthTypes = Object.freeze({
   TB303: 'tb-303',
   TR808: 'tr-808',
   SIMPLE: 'poly-synth',
+  SAMPLER: 'sampler',
 });
+
+const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
+const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
 
 const TR808_PARAM_SCHEMA = {
   master: {
@@ -95,6 +99,8 @@ function defaultInstrumentName(type) {
       return '808 Drums';
     case SynthTypes.SIMPLE:
       return 'Poly Synth';
+    case SynthTypes.SAMPLER:
+      return 'Sampler';
     default:
       return 'Instrument';
   }
@@ -144,6 +150,13 @@ function createDefaultParams(type) {
           decay: 0.8,
         },
       };
+    case SynthTypes.SAMPLER:
+      return {
+        slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
+          acc[slotId] = createDefaultSamplerSlot(slotId);
+          return acc;
+        }, {}),
+      };
     case SynthTypes.SIMPLE:
     default:
       return {
@@ -156,6 +169,21 @@ function createDefaultParams(type) {
         waveform: 'sine',
       };
   }
+}
+
+function createDefaultSamplerSlot(slotId) {
+  return {
+    id: slotId,
+    name: `Slot ${slotId}`,
+    volume: 1,
+    pan: 0,
+    pitch: 0,
+    startOffset: 0,
+    endOffset: 1,
+    reverse: false,
+    mute: false,
+    sample: null,
+  };
 }
 
 function createStepTemplate(type) {
@@ -175,6 +203,16 @@ function createStepTemplate(type) {
     [SynthTypes.TB303]: 'C2',
     [SynthTypes.SIMPLE]: 'C4',
   };
+
+  if (type === SynthTypes.SAMPLER) {
+    return {
+      active: false,
+      slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
+        acc[slotId] = false;
+        return acc;
+      }, {}),
+    };
+  }
 
   return {
     active: false,
@@ -205,6 +243,9 @@ function createInstrument(type, options = {}) {
   if (type === SynthTypes.TR808) {
     instrument.params = deepCloneTR808Params(instrument.params);
   }
+  if (type === SynthTypes.SAMPLER) {
+    ensureSamplerParamStructure(instrument);
+  }
 
   return instrument;
 }
@@ -234,9 +275,38 @@ function deepCloneTR808Params(params = {}) {
   return clone;
 }
 
+function deepCloneSamplerParams(params = {}) {
+  const clone = { slots: {} };
+  for (const slotId of SAMPLER_SLOT_IDS) {
+    const source = params?.slots?.[slotId];
+    if (source && typeof source === 'object') {
+      clone.slots[slotId] = {
+        id: slotId,
+        name: typeof source.name === 'string' ? source.name : `Slot ${slotId}`,
+        volume: typeof source.volume === 'number' ? source.volume : 1,
+        pan: typeof source.pan === 'number' ? source.pan : 0,
+        pitch: typeof source.pitch === 'number' ? source.pitch : 0,
+        startOffset: typeof source.startOffset === 'number' ? source.startOffset : 0,
+        endOffset: typeof source.endOffset === 'number' ? source.endOffset : 1,
+        reverse: Boolean(source.reverse),
+        mute: Boolean(source.mute),
+        sample: source.sample && typeof source.sample === 'object'
+          ? { ...source.sample }
+          : null,
+      };
+    } else {
+      clone.slots[slotId] = createDefaultSamplerSlot(slotId);
+    }
+  }
+  return clone;
+}
+
 function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.TR808) {
     instrument.params = deepCloneTR808Params(instrument.params);
+  }
+  if (instrument.type === SynthTypes.SAMPLER) {
+    ensureSamplerParamStructure(instrument);
   }
 
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
@@ -249,14 +319,34 @@ function cloneInstrument(instrument) {
     createdAt: instrument.createdAt,
     params: instrument.params,
     stepCount: normalizedStepCount,
-    steps: instrument.steps.map((step) => ({
-      ...step,
-      layers: step.layers ? { ...step.layers } : undefined,
-    })),
+    steps: instrument.steps.map((step) => {
+      const clonedStep = {
+        ...step,
+        layers: step.layers ? { ...step.layers } : undefined,
+        slots: step.slots ? { ...step.slots } : undefined,
+      };
+
+      if (instrument.type === SynthTypes.TR808) {
+        ensureDrumLayers(clonedStep);
+      }
+
+      if (instrument.type === SynthTypes.SAMPLER) {
+        const normalizedSlots = {};
+        for (const slotId of SAMPLER_SLOT_IDS) {
+          normalizedSlots[slotId] = Boolean(clonedStep.slots && clonedStep.slots[slotId]);
+        }
+        clonedStep.slots = normalizedSlots;
+        clonedStep.active = Object.values(normalizedSlots).some(Boolean);
+      }
+
+      return clonedStep;
+    }),
   };
 
   if (instrument.type === SynthTypes.TR808) {
     base.params = deepCloneTR808Params(instrument.params);
+  } else if (instrument.type === SynthTypes.SAMPLER) {
+    base.params = deepCloneSamplerParams(instrument.params);
   } else {
     base.params = { ...instrument.params };
   }
@@ -276,6 +366,11 @@ function ensureInstrumentStepCapacity(instrument, stepCount) {
   }
 
   if (currentLength >= targetLength) {
+    if (instrument.type === SynthTypes.SAMPLER) {
+      for (let index = 0; index < instrument.steps.length; index += 1) {
+        ensureSamplerStepSlots(instrument.steps[index]);
+      }
+    }
     return false;
   }
 
@@ -283,6 +378,11 @@ function ensureInstrumentStepCapacity(instrument, stepCount) {
   for (let index = currentLength; index < targetLength; index += 1) {
     instrument.steps.push(createStepTemplate(instrument.type));
     mutated = true;
+  }
+  if (instrument.type === SynthTypes.SAMPLER) {
+    for (let index = 0; index < instrument.steps.length; index += 1) {
+      ensureSamplerStepSlots(instrument.steps[index]);
+    }
   }
   return mutated;
 }
@@ -306,6 +406,14 @@ function applyInstrumentParams(instrument, params = {}) {
     const changed = applyTR808ParamUpdates(instrument.params, params);
     if (changed) {
       instrument.params = deepCloneTR808Params(instrument.params);
+    }
+    return;
+  }
+
+  if (instrument.type === SynthTypes.SAMPLER) {
+    const changed = applySamplerParamUpdates(instrument, params);
+    if (changed) {
+      ensureSamplerParamStructure(instrument);
     }
     return;
   }
@@ -334,11 +442,42 @@ function ensureDrumLayers(step) {
   return step.layers;
 }
 
+function ensureSamplerStepSlots(step) {
+  step.slots = step.slots || {};
+  let hasActive = false;
+  for (const slotId of SAMPLER_SLOT_IDS) {
+    if (typeof step.slots[slotId] !== 'boolean') {
+      step.slots[slotId] = false;
+    }
+    if (step.slots[slotId]) {
+      hasActive = true;
+    }
+  }
+  if (typeof step.active !== 'boolean' || step.active !== hasActive) {
+    step.active = hasActive;
+  }
+  return step.slots;
+}
+
 function ensureTR808ParamStructure(instrument) {
   if (instrument.type !== SynthTypes.TR808) {
     return;
   }
   instrument.params = deepCloneTR808Params(instrument.params || {});
+}
+
+function ensureSamplerParamStructure(instrument) {
+  if (instrument.type !== SynthTypes.SAMPLER) {
+    return;
+  }
+  const nextParams = { slots: {} };
+  const currentSlots = instrument.params && typeof instrument.params === 'object' ? instrument.params.slots || {} : {};
+  for (const slotId of SAMPLER_SLOT_IDS) {
+    const base = createDefaultSamplerSlot(slotId);
+    const existing = currentSlots[slotId];
+    nextParams.slots[slotId] = mergeSamplerSlot(base, existing, { allowExistingSample: true });
+  }
+  instrument.params = nextParams;
 }
 
 function applyTR808ParamUpdates(current, updates = {}) {
@@ -384,6 +523,36 @@ function applyTR808ParamUpdates(current, updates = {}) {
   return changed;
 }
 
+function applySamplerParamUpdates(instrument, updates = {}) {
+  if (instrument.type !== SynthTypes.SAMPLER) {
+    return false;
+  }
+  if (!updates || typeof updates !== 'object') {
+    return false;
+  }
+
+  ensureSamplerParamStructure(instrument);
+  const params = instrument.params;
+  let changed = false;
+
+  if (updates.slots && typeof updates.slots === 'object') {
+    for (const [rawSlotId, slotPayload] of Object.entries(updates.slots)) {
+      const slotId = normalizeSamplerSlotId(rawSlotId);
+      if (!slotId) {
+        continue;
+      }
+      const currentSlot = params.slots[slotId];
+      const nextSlot = mergeSamplerSlot(currentSlot, slotPayload || {});
+      if (!samplerSlotsEqual(currentSlot, nextSlot)) {
+        params.slots[slotId] = nextSlot;
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
 function applyTR808LegacyAliases(target) {
   target.volume = target.master.volume;
   target.accentLevel = target.master.accentLevel;
@@ -412,6 +581,165 @@ function applyTR808LegacyAliases(target) {
   target.clapDecay = target.clap.decay;
 }
 
+function normalizeSamplerSlotId(slotId) {
+  if (typeof slotId !== 'string') {
+    return null;
+  }
+  const normalized = slotId.trim().toUpperCase();
+  return SAMPLER_SLOT_IDS.includes(normalized) ? normalized : null;
+}
+
+function mergeSamplerSlot(base, overrides = {}, options = {}) {
+  const slot = {
+    ...base,
+    sample: base.sample ? { ...base.sample } : null,
+  };
+
+  if (!overrides || typeof overrides !== 'object') {
+    return finalizeSamplerSlot(slot);
+  }
+
+  if (typeof overrides.name === 'string' && overrides.name.trim()) {
+    slot.name = overrides.name.trim().slice(0, 64);
+  }
+
+  if (typeof overrides.volume === 'number' && Number.isFinite(overrides.volume)) {
+    slot.volume = clamp(overrides.volume, 0, 1);
+  }
+
+  if (typeof overrides.pan === 'number' && Number.isFinite(overrides.pan)) {
+    slot.pan = clamp(overrides.pan, -1, 1);
+  }
+
+  if (typeof overrides.pitch === 'number' && Number.isFinite(overrides.pitch)) {
+    slot.pitch = clamp(overrides.pitch, -24, 24);
+  }
+
+  if (typeof overrides.startOffset === 'number' && Number.isFinite(overrides.startOffset)) {
+    slot.startOffset = clamp(overrides.startOffset, 0, 0.99);
+  }
+
+  if (typeof overrides.endOffset === 'number' && Number.isFinite(overrides.endOffset)) {
+    slot.endOffset = clamp(overrides.endOffset, 0.01, 1);
+  }
+
+  if (typeof overrides.reverse === 'boolean') {
+    slot.reverse = overrides.reverse;
+  }
+
+  if (typeof overrides.mute === 'boolean') {
+    slot.mute = overrides.mute;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(overrides, 'sample')) {
+    if (overrides.sample === null) {
+      slot.sample = null;
+    } else if (overrides.sample && typeof overrides.sample === 'object') {
+      const sanitized = sanitizeSampleDescriptor(overrides.sample, { allowExisting: options.allowExistingSample === true });
+      if (sanitized) {
+        slot.sample = sanitized;
+      }
+    }
+  }
+
+  return finalizeSamplerSlot(slot);
+}
+
+function finalizeSamplerSlot(slot) {
+  const normalizedStart = clamp(Number(slot.startOffset) || 0, 0, 0.99);
+  let normalizedEnd = clamp(Number(slot.endOffset) || 1, 0.01, 1);
+  if (normalizedEnd <= normalizedStart) {
+    normalizedEnd = clamp(normalizedStart + 0.05, 0.06, 1);
+  }
+  slot.startOffset = clamp(normalizedStart, 0, Math.max(0, normalizedEnd - 0.01));
+  slot.endOffset = clamp(normalizedEnd, slot.startOffset + 0.01, 1);
+  slot.volume = clamp(Number(slot.volume) || 0, 0, 1);
+  slot.pan = clamp(Number(slot.pan) || 0, -1, 1);
+  slot.pitch = clamp(Number(slot.pitch) || 0, -24, 24);
+  slot.reverse = Boolean(slot.reverse);
+  slot.mute = Boolean(slot.mute);
+  slot.id = slot.id || createDefaultSamplerSlot('A').id;
+  return slot;
+}
+
+function sanitizeSampleDescriptor(descriptor, { allowExisting = false } = {}) {
+  if (!descriptor || typeof descriptor !== 'object') {
+    return null;
+  }
+
+  if (descriptor.clear === true) {
+    return null;
+  }
+
+  const data = typeof descriptor.data === 'string' ? descriptor.data : null;
+  if (!data || !data.length) {
+    return null;
+  }
+
+  let bytesLength = Number(descriptor.bytesLength);
+  if (!allowExisting || !Number.isFinite(bytesLength) || bytesLength <= 0) {
+    try {
+      const buffer = Buffer.from(data, 'base64');
+      bytesLength = buffer.length;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  if (!Number.isFinite(bytesLength) || bytesLength <= 0 || bytesLength > SAMPLER_MAX_SAMPLE_BYTES) {
+    return null;
+  }
+
+  const name = typeof descriptor.name === 'string' && descriptor.name.trim() ? descriptor.name.trim().slice(0, 120) : 'Sample';
+  const mimeType = typeof descriptor.mimeType === 'string' && descriptor.mimeType.trim() ? descriptor.mimeType.trim().slice(0, 64) : 'audio/wav';
+  const updatedAt = Number.isFinite(descriptor.updatedAt) ? descriptor.updatedAt : Date.now();
+
+  return {
+    name,
+    mimeType,
+    data,
+    bytesLength,
+    updatedAt,
+  };
+}
+
+function samplerSlotsEqual(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  if (
+    a.name !== b.name
+    || a.volume !== b.volume
+    || a.pan !== b.pan
+    || a.pitch !== b.pitch
+    || a.startOffset !== b.startOffset
+    || a.endOffset !== b.endOffset
+    || a.reverse !== b.reverse
+    || a.mute !== b.mute
+  ) {
+    return false;
+  }
+
+  const sampleA = a.sample;
+  const sampleB = b.sample;
+  if (!sampleA && !sampleB) {
+    return true;
+  }
+  if (!sampleA || !sampleB) {
+    return false;
+  }
+  return (
+    sampleA.name === sampleB.name
+    && sampleA.mimeType === sampleB.mimeType
+    && sampleA.data === sampleB.data
+    && sampleA.bytesLength === sampleB.bytesLength
+    && sampleA.updatedAt === sampleB.updatedAt
+  );
+}
+
 function applyStepChanges(step, changes = {}) {
   if (typeof changes.active === 'boolean') {
     step.active = changes.active;
@@ -425,6 +753,24 @@ function applyStepChanges(step, changes = {}) {
       }
     }
     step.active = Object.values(step.layers).some(Boolean);
+  }
+
+  if (changes.slots && typeof changes.slots === 'object') {
+    const slots = ensureSamplerStepSlots(step);
+    let mutated = false;
+    for (const [slotId, flag] of Object.entries(changes.slots)) {
+      const normalized = normalizeSamplerSlotId(slotId);
+      if (!normalized || typeof flag !== 'boolean') {
+        continue;
+      }
+      if (slots[normalized] !== flag) {
+        slots[normalized] = flag;
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      step.active = Object.values(slots).some(Boolean);
+    }
   }
 
   if (typeof changes.pitch === 'string') {
@@ -737,7 +1083,7 @@ io.on('connection', (socket) => {
     broadcastInstrumentState(room.id, instrumentId);
   });
 
-  socket.on('instrument:step', ({ instrumentId, stepIndex, step, drum, value } = {}) => {
+  socket.on('instrument:step', ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -771,6 +1117,19 @@ io.on('connection', (socket) => {
       const nextValue = typeof value === 'boolean' ? value : !layers[normalizedDrum];
       layers[normalizedDrum] = nextValue;
       targetStep.active = Object.values(layers).some(Boolean);
+      broadcastInstrumentState(room.id, instrumentId);
+      return;
+    }
+
+    if (instrument.type === SynthTypes.SAMPLER) {
+      const slotId = normalizeSamplerSlotId(slot || drum);
+      if (!slotId) {
+        return;
+      }
+      const slots = ensureSamplerStepSlots(targetStep);
+      const nextValue = typeof value === 'boolean' ? value : !slots[slotId];
+      slots[slotId] = nextValue;
+      targetStep.active = Object.values(slots).some(Boolean);
       broadcastInstrumentState(room.id, instrumentId);
       return;
     }

@@ -432,6 +432,10 @@
         border-color: rgba(129, 140, 248, 0.4);
       }
 
+      .synth-card.tone-sampler {
+        border-color: rgba(14, 165, 233, 0.4);
+      }
+
       @keyframes synth-pop {
         from {
           transform: translateY(12px) scale(0.96);
@@ -552,6 +556,119 @@
         flex-wrap: wrap;
         gap: 8px;
         margin-top: 4px;
+      }
+
+      .sampler-slot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 12px;
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.55);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+        min-width: 0;
+      }
+
+      .sampler-slot.active {
+        border-color: var(--sampler-color, #38bdf8);
+        box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+      }
+
+      .sampler-slot.drag-over {
+        border-color: #38bdf8;
+        background: rgba(56, 189, 248, 0.12);
+      }
+
+      .sampler-slot-button {
+        min-width: 44px;
+      }
+
+      .sampler-slot-info {
+        flex: 1;
+        font-size: 0.8rem;
+        opacity: 0.85;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .sampler-slot-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .sampler-slot-file-input {
+        display: none;
+      }
+
+      .sampler-params-header {
+        font-weight: 600;
+        margin-bottom: 6px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+      }
+
+      .sampler-sample-status {
+        font-size: 0.8rem;
+        opacity: 0.8;
+        margin-bottom: 10px;
+      }
+
+      .sampler-param-control {
+        position: relative;
+      }
+
+      .sampler-toggle-control {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .sampler-toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.85rem;
+      }
+
+      .sampler-cell {
+        --sampler-color: rgba(56, 189, 248, 0.6);
+        border-color: rgba(148, 163, 184, 0.2);
+      }
+
+      .sampler-cell.active {
+        border-color: var(--sampler-color, #38bdf8);
+        box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+      }
+
+      .sampler-step-toggle {
+        width: 100%;
+        height: 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.45);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+      }
+
+      .sampler-indicator {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, rgba(248, 250, 252, 0.15), rgba(148, 163, 184, 0.15));
+        border: 2px solid rgba(148, 163, 184, 0.45);
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+      }
+
+      .sampler-indicator.active {
+        background: var(--sampler-color, #38bdf8);
+        border-color: rgba(15, 23, 42, 0.85);
+        transform: scale(1.1);
       }
 
       .drum-button {
@@ -1000,6 +1117,10 @@
             <div class="synth-option" data-synth-type="poly-synth">
               <h4>Poly Synth</h4>
               <span>Versatile polyphonic synth with filter and envelope control.</span>
+            </div>
+            <div class="synth-option" data-synth-type="sampler">
+              <h4>Sampler</h4>
+              <span>Six-slot sampler for sequencing your own WAV or MP3 files.</span>
             </div>
           </div>
         </div>
