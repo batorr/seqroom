@@ -27,6 +27,8 @@ export const audioState = {
 export const socketState = {
     instrumentElements: new Map(),
     pendingRoomRequest: false,
+    roomRequestTimeoutId: null,
+    pendingRoomRequestMeta: null,
     pendingPings: new Map(),
     clockOffsetMs: 0,
     latencyEstimateMs: 0,

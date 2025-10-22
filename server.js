@@ -91,6 +91,21 @@ function clampStepCount(value) {
   return clamp(Math.round(numeric), STEP_COUNT_MIN, STEP_COUNT_MAX);
 }
 
+function computeStepDurationMs(bpm) {
+  const numeric = Number(bpm);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return 60000 / (numeric * 4);
+}
+
+function normalizeWaveform(value) {
+  if (typeof value === 'string' && value.toLowerCase() === 'saw') {
+    return 'sawtooth';
+  }
+  return value;
+}
+
 function defaultInstrumentName(type) {
   switch (type) {
     case SynthTypes.TB303:
@@ -115,7 +130,7 @@ function createDefaultParams(type) {
         resonance: 0.7,
         envelopeMod: 0.6,
         decay: 0.4,
-        waveform: 'saw',
+        waveform: 'sawtooth',
       };
     case SynthTypes.TR808:
       return {
@@ -308,6 +323,13 @@ function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
   }
+  if (
+    instrument.params
+    && typeof instrument.params === 'object'
+    && Object.prototype.hasOwnProperty.call(instrument.params, 'waveform')
+  ) {
+    instrument.params.waveform = normalizeWaveform(instrument.params.waveform);
+  }
 
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
   instrument.stepCount = normalizedStepCount;
@@ -349,6 +371,13 @@ function cloneInstrument(instrument) {
     base.params = deepCloneSamplerParams(instrument.params);
   } else {
     base.params = { ...instrument.params };
+    if (
+      base.params
+      && typeof base.params === 'object'
+      && Object.prototype.hasOwnProperty.call(base.params, 'waveform')
+    ) {
+      base.params.waveform = normalizeWaveform(base.params.waveform);
+    }
   }
 
   return base;
@@ -396,6 +425,42 @@ function cloneTransport(transport) {
   };
 }
 
+function updateRoomTempo(room, nextTempo) {
+  if (!room || !room.transport) {
+    return false;
+  }
+
+  const numericTempo = Number(nextTempo);
+  if (!Number.isFinite(numericTempo)) {
+    return false;
+  }
+
+  const clampedTempo = Math.round(clamp(numericTempo, TEMPO_MIN, TEMPO_MAX));
+  const newStepDuration = computeStepDurationMs(clampedTempo);
+  if (newStepDuration <= 0) {
+    return false;
+  }
+
+  if (
+    room.transport.playing
+    && typeof room.transport.sessionStartTime === 'number'
+    && Number.isFinite(room.transport.sessionStartTime)
+  ) {
+    const now = Date.now();
+    const elapsed = now - room.transport.sessionStartTime;
+    const oldStepDuration = computeStepDurationMs(room.transport.bpm || DEFAULT_TEMPO);
+    if (elapsed > 0 && oldStepDuration > 0) {
+      const stepProgress = elapsed / oldStepDuration;
+      const newSessionStart = now - stepProgress * newStepDuration;
+      room.transport.sessionStartTime = Math.round(newSessionStart);
+      room.transport.lastScheduledStart = room.transport.sessionStartTime;
+    }
+  }
+
+  room.transport.bpm = clampedTempo;
+  return true;
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -426,7 +491,14 @@ function applyInstrumentParams(instrument, params = {}) {
     if (typeof value === 'number' && Number.isFinite(value)) {
       instrument.params[key] = value;
     } else if (typeof value === 'string') {
-      instrument.params[key] = value;
+      let nextValue = value;
+      if (key === 'waveform') {
+        nextValue = normalizeWaveform(value);
+        if (!['sine', 'triangle', 'sawtooth', 'square'].includes(nextValue)) {
+          continue;
+        }
+      }
+      instrument.params[key] = nextValue;
     } else if (typeof value === 'boolean') {
       instrument.params[key] = value;
     }
@@ -942,12 +1014,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const numericTempo = Number(nextTempo);
-    if (!Number.isFinite(numericTempo) || numericTempo < TEMPO_MIN || numericTempo > TEMPO_MAX) {
+    if (!updateRoomTempo(room, nextTempo)) {
       return;
     }
 
-    room.transport.bpm = Math.round(clamp(numericTempo, TEMPO_MIN, TEMPO_MAX));
     broadcastTransportState(roomId);
   });
 
@@ -957,12 +1027,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const numericTempo = Number(bpm);
-    if (!Number.isFinite(numericTempo)) {
+    if (!updateRoomTempo(room, bpm)) {
       return;
     }
 
-    room.transport.bpm = Math.round(clamp(numericTempo, TEMPO_MIN, TEMPO_MAX));
     broadcastTransportState(room.id);
   });
 

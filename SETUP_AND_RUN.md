@@ -90,10 +90,10 @@ secrum/
 ├── server.js                      # Express + Socket.IO server (1,300 lines)
 ├── package.json                   # Dependencies
 ├── public/                        # Static files served by Express
-│   ├── index.html                 # Main HTML (updated to use modular code)
+│   ├── index.html                 # Main HTML (ES module entry)
 │   ├── recording-processor.js     # AudioWorklet for recording
 │   ├── client.js                  # OLD monolithic code (backup)
-│   └── src/                       # NEW modular code
+│   └── src/                       # Modular application source
 │       ├── app.js                 # Entry point (auto-initializes)
 │       ├── constants/             # Configuration
 │       │   ├── audio.js
@@ -120,7 +120,6 @@ secrum/
 │       │       └── sampler.js
 │       └── socket/                # WebSocket layer
 │           └── main.js
-├── src/                           # Source modules (root - for development)
 └── node_modules/                  # Dependencies
 ```
 

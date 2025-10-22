@@ -11,7 +11,9 @@ export function schedulePolySynth(instrument, step, when, ctx) {
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
 
-    const waveform = params.waveform;
+    const waveform = typeof params.waveform === 'string' && params.waveform.toLowerCase() === 'saw'
+        ? 'sawtooth'
+        : params.waveform;
     osc.type = ['sine', 'triangle', 'sawtooth', 'square'].includes(waveform) ? waveform : 'sine';
     osc.frequency.value = noteToFrequency(step.pitch || 'C4');
 

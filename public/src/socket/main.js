@@ -15,10 +15,44 @@ import { prepareSamplerAudio, cleanupSamplerBuffers } from '../audio/instruments
 // Initialize Socket.IO
 export const socket = io({ autoConnect: false });
 
+const ROOM_REQUEST_TIMEOUT_MS = 8000;
+
+function clearRoomRequestTimer() {
+    if (socketState.roomRequestTimeoutId) {
+        clearTimeout(socketState.roomRequestTimeoutId);
+        socketState.roomRequestTimeoutId = null;
+    }
+}
+
+function resetPendingRoomRequestState() {
+    clearRoomRequestTimer();
+    socketState.pendingRoomRequest = false;
+    socketState.pendingRoomRequestMeta = null;
+}
+
+function failPendingRoomRequest(errorCode) {
+    const metadata = socketState.pendingRoomRequestMeta;
+    resetPendingRoomRequestState();
+    if (metadata && metadata.mode) {
+        handleRoomError(metadata.mode, errorCode);
+    } else if (errorCode) {
+        window.alert(`Unable to connect: ${errorCode}`);
+        showLanding();
+        showRoomCodeHint('');
+    }
+}
+
 // Setup socket event listeners
 export function setupSocketEvents() {
     socket.on('connect_error', (error) => {
         console.error('Socket connection error:', error);
+        if (socketState.pendingRoomRequest) {
+            failPendingRoomRequest('connection-error');
+        }
+    });
+
+    socket.on('disconnect', () => {
+        resetPendingRoomRequestState();
     });
 
     socket.on('state:init', (payload) => {
@@ -237,7 +271,9 @@ export function connectToRoom(roomId, { mode }) {
     if (socketState.pendingRoomRequest) {
         return;
     }
+    resetPendingRoomRequestState();
     socketState.pendingRoomRequest = true;
+    socketState.pendingRoomRequestMeta = { mode, roomId };
 
     state.isInRoom = false;
     state.roomId = null;
@@ -252,8 +288,20 @@ export function connectToRoom(roomId, { mode }) {
     }
 
     const eventName = mode === 'create' ? 'room:create' : 'room:join';
+    clearRoomRequestTimer();
+    socketState.roomRequestTimeoutId = window.setTimeout(() => {
+        if (!socketState.pendingRoomRequest) {
+            return;
+        }
+        failPendingRoomRequest('request-timeout');
+    }, ROOM_REQUEST_TIMEOUT_MS);
     socket.emit(eventName, { roomId }, (response = {}) => {
-        socketState.pendingRoomRequest = false;
+        const wasPending = socketState.pendingRoomRequest;
+        resetPendingRoomRequestState();
+
+        if (!wasPending) {
+            return;
+        }
 
         if (!response.ok) {
             handleRoomError(mode, response.error);
@@ -279,6 +327,10 @@ export function handleRoomError(mode, errorCode) {
         window.alert('Could not find that room. Check the code and try again.');
     } else if (errorCode === 'invalid-room-id') {
         window.alert('Room code is invalid.');
+    } else if (errorCode === 'connection-error') {
+        window.alert('Unable to connect to the server. Check your connection and try again.');
+    } else if (errorCode === 'request-timeout') {
+        window.alert('Connection attempt timed out. Please try again.');
     } else if (errorCode) {
         window.alert(`Unable to connect: ${errorCode}`);
     } else {
@@ -297,6 +349,7 @@ export function leaveRoom() {
 
     socket.emit('room:leave');
     socket.disconnect();
+    resetPendingRoomRequestState();
 
     state.isInRoom = false;
     state.roomId = null;

@@ -49,7 +49,7 @@ function createInstrumentLibrary(sliderParam, selectParam) {
                 sliderParam('envelopeMod', 'Env Mod', 0, 1, 0.01),
                 sliderParam('decay', 'Decay', 0, 1, 0.01),
                 selectParam('waveform', 'Waveform', [
-                    { value: 'saw', label: 'Saw' },
+                    { value: 'sawtooth', label: 'Saw' },
                     { value: 'square', label: 'Square' },
                 ]),
             ],
@@ -81,7 +81,7 @@ function createInstrumentLibrary(sliderParam, selectParam) {
                 selectParam('waveform', 'Waveform', [
                     { value: 'sine', label: 'Sine' },
                     { value: 'triangle', label: 'Triangle' },
-                    { value: 'saw', label: 'Saw' },
+                    { value: 'sawtooth', label: 'Saw' },
                     { value: 'square', label: 'Square' },
                 ]),
             ],

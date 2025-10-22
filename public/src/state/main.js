@@ -30,6 +30,21 @@ export const state = {
     tempoPreview: DEFAULT_BPM,
 };
 
+function normalizeWaveform(value) {
+    if (typeof value === 'string' && value.toLowerCase() === 'saw') {
+        return 'sawtooth';
+    }
+    return value;
+}
+
+function normalizeSynthParams(params = {}) {
+    const normalized = { ...(params || {}) };
+    if (Object.prototype.hasOwnProperty.call(normalized, 'waveform')) {
+        normalized.waveform = normalizeWaveform(normalized.waveform);
+    }
+    return normalized;
+}
+
 // State mutation functions
 export function setRoomId(roomId) {
     state.roomId = roomId;
@@ -70,7 +85,11 @@ export function setActiveInstrument(instrumentId) {
 export function updateInstrumentParams(instrumentId, params) {
     const instrument = state.instruments.get(instrumentId);
     if (instrument) {
-        instrument.params = { ...instrument.params, ...params };
+        const merged = { ...instrument.params, ...params };
+        if ('waveform' in merged) {
+            merged.waveform = normalizeWaveform(merged.waveform);
+        }
+        instrument.params = merged;
     }
 }
 
@@ -139,7 +158,7 @@ export function normalizeInstrument(instrument) {
 
     const normalizedParams = instrument.type === SynthTypes.SAMPLER
         ? normalizeSamplerParams(instrument.params)
-        : { ...instrument.params };
+        : normalizeSynthParams(instrument.params);
 
     return {
         id: instrument.id,
