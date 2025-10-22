@@ -1,6 +1,7 @@
 class RecorderProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    // sampleRate is a global variable in AudioWorkletGlobalScope
     this.port.postMessage({
       type: 'ready',
       sampleRate,
