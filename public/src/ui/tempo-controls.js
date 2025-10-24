@@ -34,12 +34,6 @@ export function commitTempo(bpm, socket) {
 // Setup tempo controls event listeners
 export function setupTempoControls(socket) {
     tempoSlider.addEventListener('input', (event) => {
-        const preview = clampTempo(event.target.value);
-        state.tempoPreview = preview;
-        updateTempoDisplay(preview);
-    });
-
-    tempoSlider.addEventListener('change', (event) => {
         const nextTempo = clampTempo(event.target.value);
         state.tempoPreview = nextTempo;
         commitTempo(nextTempo, socket);

@@ -22,6 +22,12 @@ import {
 } from '../utils/helpers.js';
 import { instrumentTemplate, instrumentListEl, instrumentEmptyEl } from './main.js';
 
+const PITCH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const PITCH_OCTAVE_MIN = 0;
+const PITCH_OCTAVE_MAX = 7;
+let activePitchPopup = null;
+let pitchPopupStylesInjected = false;
+
 // Helper functions
 export function getVisibleStepSlots(stepCount) {
     const effective = clampStepCount(stepCount ?? STEP_COUNT);
@@ -48,6 +54,388 @@ function arrayBufferToBase64(buffer) {
     return window.btoa(binary);
 }
 
+function ensurePitchPopupStyles() {
+    if (pitchPopupStylesInjected) {
+        return;
+    }
+    const style = document.createElement('style');
+    style.id = 'pitch-popup-styles';
+    style.textContent = `
+        .pitch-popup {
+            position: absolute;
+            z-index: 1200;
+            background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.88));
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            backdrop-filter: blur(12px);
+            border-radius: 18px;
+            padding: 18px 22px;
+            color: #e2e8f0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            box-shadow: 0 28px 65px rgba(15, 23, 42, 0.5);
+            opacity: 0;
+            transform: translateY(12px) scale(0.94);
+            transition: opacity 160ms ease, transform 160ms ease;
+        }
+
+        .pitch-popup--visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        .pitch-popup__columns {
+            display: flex;
+            gap: 18px;
+            align-items: stretch;
+        }
+
+        .pitch-popup__column {
+            flex: 1 1 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            padding: 14px 20px;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            cursor: ns-resize;
+            user-select: none;
+            transition: background 140ms ease, border 140ms ease, box-shadow 140ms ease;
+        }
+
+        .pitch-popup__column--active {
+            background: rgba(56, 189, 248, 0.22);
+            border-color: rgba(125, 211, 252, 0.55);
+            box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+        }
+
+        .pitch-popup__value {
+            font-family: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', 'Fira Code', monospace;
+            font-size: 38px;
+            letter-spacing: 0.08em;
+            color: #f8fafc;
+        }
+
+        .pitch-popup__label {
+            margin-top: 8px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.34em;
+            opacity: 0.72;
+        }
+
+        .pitch-popup__hint {
+            font-size: 11px;
+            text-align: center;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            opacity: 0.65;
+            pointer-events: none;
+        }
+    `;
+    document.head.appendChild(style);
+    pitchPopupStylesInjected = true;
+}
+
+function normalizeNoteIndex(index) {
+    const total = PITCH_NOTE_NAMES.length;
+    return ((index % total) + total) % total;
+}
+
+function clampOctave(value) {
+    if (!Number.isFinite(value)) {
+        return 0;
+    }
+    return Math.min(PITCH_OCTAVE_MAX, Math.max(PITCH_OCTAVE_MIN, Math.round(value)));
+}
+
+function parsePitchValue(pitch) {
+    const fallback = { noteIndex: 0, octave: 3 };
+    if (typeof pitch !== 'string' || !pitch.length) {
+        return fallback;
+    }
+    const trimmed = pitch.trim();
+    const match = trimmed.match(/^([A-G])(#?)(-?\d)$/i);
+    if (!match) {
+        return fallback;
+    }
+    const [, letter, accidental, octaveStr] = match;
+    const noteName = `${letter.toUpperCase()}${accidental || ''}`;
+    const idx = PITCH_NOTE_NAMES.indexOf(noteName);
+    const noteIndex = idx >= 0 ? idx : fallback.noteIndex;
+    const octave = clampOctave(Number(octaveStr));
+    return { noteIndex, octave };
+}
+
+function formatPitchValue(noteIndex, octave) {
+    const safeIndex = normalizeNoteIndex(noteIndex);
+    const safeOctave = clampOctave(octave);
+    return `${PITCH_NOTE_NAMES[safeIndex]}${safeOctave}`;
+}
+
+function closePitchPopup({ commit = false } = {}) {
+    if (!activePitchPopup) {
+        return;
+    }
+    const { container, onDocumentClick, onKeyDown, onScroll, onResize, commitSelection } = activePitchPopup;
+    document.removeEventListener('click', onDocumentClick, true);
+    window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('resize', onResize);
+    if (container) {
+        container.classList.remove('pitch-popup--visible');
+        const removeNode = () => {
+            container.remove();
+        };
+        container.addEventListener('transitionend', removeNode, { once: true });
+        setTimeout(removeNode, 180);
+    }
+    const shouldCommit = commit;
+    const commitFn = commitSelection;
+    activePitchPopup = null;
+    if (shouldCommit && typeof commitFn === 'function') {
+        commitFn();
+    }
+}
+
+function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIndex }) {
+    if (!anchorEl || !noteEl || !step) {
+        return;
+    }
+    if (activePitchPopup && activePitchPopup.instrumentId === instrumentId && activePitchPopup.stepIndex === stepIndex) {
+        closePitchPopup({ commit: true });
+        return;
+    }
+    closePitchPopup({ commit: false });
+    ensurePitchPopupStyles();
+
+    const initialPitch = step.pitch || selectEl?.dataset?.pitch || 'C3';
+    const parsed = parsePitchValue(initialPitch);
+    let noteIndex = parsed.noteIndex;
+    let octave = parsed.octave;
+    let activeField = 'note';
+
+    const container = document.createElement('div');
+    container.className = 'pitch-popup';
+    container.setAttribute('role', 'dialog');
+    container.setAttribute('aria-modal', 'true');
+
+    const columns = document.createElement('div');
+    columns.className = 'pitch-popup__columns';
+
+    const noteColumn = document.createElement('div');
+    noteColumn.className = 'pitch-popup__column pitch-popup__column--note pitch-popup__column--active';
+    const noteValueEl = document.createElement('div');
+    noteValueEl.className = 'pitch-popup__value';
+    noteValueEl.textContent = PITCH_NOTE_NAMES[noteIndex];
+    const noteLabelEl = document.createElement('div');
+    noteLabelEl.className = 'pitch-popup__label';
+    noteLabelEl.textContent = 'NOTE';
+    noteColumn.append(noteValueEl, noteLabelEl);
+
+    const octaveColumn = document.createElement('div');
+    octaveColumn.className = 'pitch-popup__column pitch-popup__column--octave';
+    const octaveValueEl = document.createElement('div');
+    octaveValueEl.className = 'pitch-popup__value';
+    octaveValueEl.textContent = String(octave);
+    const octaveLabelEl = document.createElement('div');
+    octaveLabelEl.className = 'pitch-popup__label';
+    octaveLabelEl.textContent = 'OCTAVE';
+    octaveColumn.append(octaveValueEl, octaveLabelEl);
+
+    columns.append(noteColumn, octaveColumn);
+    container.appendChild(columns);
+
+    const hint = document.createElement('div');
+    hint.className = 'pitch-popup__hint';
+    hint.textContent = 'Scroll or arrow keys · click outside to apply';
+    container.appendChild(hint);
+
+    document.body.appendChild(container);
+
+    const positionPopup = () => {
+        const rect = anchorEl.getBoundingClientRect();
+        const popupRect = container.getBoundingClientRect();
+        let top = rect.top + window.scrollY - popupRect.height - 12;
+        let fromBelow = false;
+        if (top < window.scrollY + 8) {
+            top = rect.bottom + window.scrollY + 12;
+            fromBelow = true;
+        }
+        let left = rect.left + window.scrollX + rect.width / 2 - popupRect.width / 2;
+        const minLeft = window.scrollX + 8;
+        const maxLeft = window.scrollX + window.innerWidth - popupRect.width - 8;
+        left = Math.min(Math.max(left, minLeft), Math.max(minLeft, maxLeft));
+        container.style.top = `${top}px`;
+        container.style.left = `${left}px`;
+        if (fromBelow) {
+            container.style.transformOrigin = '50% 0%';
+        } else {
+            container.style.transformOrigin = '50% 100%';
+        }
+    };
+
+    positionPopup();
+    requestAnimationFrame(() => {
+        container.classList.add('pitch-popup--visible');
+    });
+
+    const setActiveField = (field) => {
+        activeField = field;
+        if (field === 'note') {
+            noteColumn.classList.add('pitch-popup__column--active');
+            octaveColumn.classList.remove('pitch-popup__column--active');
+        } else {
+            octaveColumn.classList.add('pitch-popup__column--active');
+            noteColumn.classList.remove('pitch-popup__column--active');
+        }
+    };
+
+    const updateDisplay = () => {
+        noteValueEl.textContent = PITCH_NOTE_NAMES[normalizeNoteIndex(noteIndex)];
+        octaveValueEl.textContent = String(clampOctave(octave));
+    };
+
+    const adjustNote = (delta) => {
+        noteIndex = normalizeNoteIndex(noteIndex + delta);
+        updateDisplay();
+    };
+
+    const adjustOctave = (delta) => {
+        const next = clampOctave(octave + delta);
+        if (next !== octave) {
+            octave = next;
+            updateDisplay();
+        }
+    };
+
+    const WHEEL_THROTTLE_MS = 180;
+    let lastNoteWheelTime = 0;
+    let lastOctaveWheelTime = 0;
+
+    const handleNoteWheel = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const now = Date.now();
+        if (now - lastNoteWheelTime < WHEEL_THROTTLE_MS) {
+            return;
+        }
+        lastNoteWheelTime = now;
+        const delta = event.deltaY > 0 ? -1 : 1;
+        adjustNote(delta);
+    };
+
+    const handleOctaveWheel = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const now = Date.now();
+        if (now - lastOctaveWheelTime < WHEEL_THROTTLE_MS) {
+            return;
+        }
+        lastOctaveWheelTime = now;
+        const delta = event.deltaY > 0 ? -1 : 1;
+        adjustOctave(delta);
+    };
+
+    setActiveField('note');
+
+    noteColumn.addEventListener('mouseenter', () => setActiveField('note'));
+    octaveColumn.addEventListener('mouseenter', () => setActiveField('octave'));
+    noteColumn.addEventListener('wheel', handleNoteWheel, { passive: false });
+    octaveColumn.addEventListener('wheel', handleOctaveWheel, { passive: false });
+    container.addEventListener('wheel', (event) => {
+        if (event.target === container || event.target === columns || event.target === hint) {
+            event.preventDefault();
+        }
+    }, { passive: false });
+
+    const handleKeyDown = (event) => {
+        if (!activePitchPopup) {
+            return;
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            const delta = event.key === 'ArrowUp' ? 1 : -1;
+            if (activeField === 'note') {
+                adjustNote(delta);
+            } else {
+                adjustOctave(delta);
+            }
+        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            setActiveField(activeField === 'note' ? 'octave' : 'note');
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            closePitchPopup({ commit: false });
+        } else if (event.key === 'Enter') {
+            event.preventDefault();
+            closePitchPopup({ commit: true });
+        }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    const handleScroll = () => positionPopup();
+    const handleResize = () => positionPopup();
+
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', handleResize);
+
+    let ignoreNextClick = true;
+    setTimeout(() => {
+        ignoreNextClick = false;
+    }, 120);
+
+    const handleDocumentClick = (event) => {
+        if (ignoreNextClick) {
+            return;
+        }
+        if (container.contains(event.target)) {
+            return;
+        }
+        closePitchPopup({ commit: true });
+    };
+
+    document.addEventListener('click', handleDocumentClick, true);
+
+    const commitSelection = () => {
+        const pitchValue = formatPitchValue(noteIndex, octave);
+        if (selectEl) {
+            selectEl.dataset.pitch = pitchValue;
+            selectEl.textContent = pitchValue;
+        }
+        noteEl.textContent = pitchValue;
+        const previousPitch = step.pitch;
+        step.pitch = pitchValue;
+        if (previousPitch === pitchValue) {
+            return;
+        }
+        socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
+        if (socket) {
+            socket.emit('instrument:step', {
+                instrumentId,
+                stepIndex,
+                step: { pitch: pitchValue },
+            });
+        }
+    };
+
+    activePitchPopup = {
+        container,
+        onDocumentClick: handleDocumentClick,
+        onKeyDown: handleKeyDown,
+        onScroll: handleScroll,
+        onResize: handleResize,
+        commitSelection,
+        instrumentId,
+        stepIndex,
+    };
+
+    anchorEl.blur();
+}
+
 // Import socket dynamically
 let socket = null;
 import('../socket/main.js').then((module) => {
@@ -56,6 +444,9 @@ import('../socket/main.js').then((module) => {
 
 // Render functions
 export function renderInstrument(instrumentId) {
+    if (activePitchPopup) {
+        closePitchPopup({ commit: false });
+    }
     const instrument = state.instruments.get(instrumentId);
     if (!instrument) {
         removeInstrumentCard(instrumentId);
@@ -90,7 +481,49 @@ export function updateActiveInstrumentHighlight() {
     });
 }
 
-export function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
+function updateStepControlDisplay(entry, stepCount) {
+    if (!entry || !entry.stepControl) {
+        return;
+    }
+    const control = entry.stepControl;
+    if (control.manualEditing) {
+        control.manualEditing.editing = false;
+    }
+    if (control.slider) {
+        control.slider.value = String(stepCount);
+    }
+    if (control.input) {
+        control.input.value = String(stepCount);
+    }
+    if (control.value) {
+        control.value.textContent = formatStepCountLabel(stepCount);
+    }
+    if (Array.isArray(control.presets)) {
+        control.presets.forEach((button) => {
+            const presetValue = Number(button.textContent);
+            button.classList.toggle('selected', presetValue === stepCount);
+        });
+    }
+}
+
+function refreshPlaybackIndicatorsView() {
+    import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
+        updatePlaybackIndicators(getCurrentStepIndex());
+    });
+}
+
+function refreshInstrumentStepUI(instrumentId) {
+    const entry = socketState.instrumentElements.get(instrumentId);
+    const instrument = state.instruments.get(instrumentId);
+    if (!entry || !instrument) {
+        return;
+    }
+    renderStepGrid(entry.stepGrid, instrument);
+    refreshPlaybackIndicatorsView();
+}
+
+export function requestInstrumentStepCountChange(instrumentId, nextStepCount, options = {}) {
+    const { skipFullRender = false } = options;
     if (state.activeInstrumentId !== instrumentId) {
         setActiveInstrument(instrumentId);
     }
@@ -104,19 +537,26 @@ export function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
     const desired = clampStepCount(nextStepCount);
 
     if (desired === previous) {
-        setInstrumentStepCountLocal(instrumentId, desired);
-        renderInstrument(instrumentId);
-        import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-            updatePlaybackIndicators(getCurrentStepIndex());
-        });
+        if (!skipFullRender) {
+            setInstrumentStepCountLocal(instrumentId, desired);
+            renderInstrument(instrumentId);
+        } else {
+            setInstrumentStepCountLocal(instrumentId, desired);
+            refreshInstrumentStepUI(instrumentId);
+            const entry = socketState.instrumentElements.get(instrumentId);
+            updateStepControlDisplay(entry, desired);
+        }
         return;
     }
 
     setInstrumentStepCountLocal(instrumentId, desired);
-    renderInstrument(instrumentId);
-    import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-        updatePlaybackIndicators(getCurrentStepIndex());
-    });
+    if (!skipFullRender) {
+        renderInstrument(instrumentId);
+    } else {
+        refreshInstrumentStepUI(instrumentId);
+        const entry = socketState.instrumentElements.get(instrumentId);
+        updateStepControlDisplay(entry, desired);
+    }
 
     if (!state.isInRoom) {
         return;
@@ -133,10 +573,13 @@ export function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
                 console.error('Failed to update instrument length:', response.error);
             }
             setInstrumentStepCountLocal(instrumentId, previous);
-            renderInstrument(instrumentId);
-            import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-                updatePlaybackIndicators(getCurrentStepIndex());
-            });
+            if (!skipFullRender) {
+                renderInstrument(instrumentId);
+            } else {
+                refreshInstrumentStepUI(instrumentId);
+                const entry = socketState.instrumentElements.get(instrumentId);
+                updateStepControlDisplay(entry, previous);
+            }
             return;
         }
 
@@ -144,11 +587,14 @@ export function requestInstrumentStepCountChange(instrumentId, nextStepCount) {
             const acknowledged = clampStepCount(response.stepCount);
             if (acknowledged !== desired) {
                 setInstrumentStepCountLocal(instrumentId, acknowledged);
-                renderInstrument(instrumentId);
+                if (!skipFullRender) {
+                    renderInstrument(instrumentId);
+                } else {
+                    refreshInstrumentStepUI(instrumentId);
+                    const entry = socketState.instrumentElements.get(instrumentId);
+                    updateStepControlDisplay(entry, acknowledged);
+                }
             }
-            import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-                updatePlaybackIndicators(getCurrentStepIndex());
-            });
         }
     });
 }
@@ -258,23 +704,9 @@ export function ensureInstrumentCard(instrument) {
             setActiveInstrument(instrument.id);
         }
         manualStepState.editing = false;
-        const preview = clampStepCount(stepSlider.value);
-        stepNumberInput.value = String(preview);
-        stepValue.textContent = formatStepCountLabel(preview);
-        presetButtons.forEach((button) => {
-            const presetValue = Number(button.textContent);
-            button.classList.toggle('selected', presetValue === preview);
-        });
-    });
-
-    stepSlider.addEventListener('change', (event) => {
-        event.stopPropagation();
-        if (state.activeInstrumentId !== instrument.id) {
-            setActiveInstrument(instrument.id);
-        }
-        manualStepState.editing = false;
         const desired = clampStepCount(stepSlider.value);
-        requestInstrumentStepCountChange(instrumentId, desired);
+        socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
+        requestInstrumentStepCountChange(instrumentId, desired, { skipFullRender: true });
     });
 
     stepNumberInput.addEventListener('keydown', (event) => {
@@ -284,7 +716,8 @@ export function ensureInstrumentCard(instrument) {
                 if (stepNumberInput.value !== '') {
                     const desired = clampStepCount(stepNumberInput.value);
                     stepNumberInput.value = String(desired);
-                    requestInstrumentStepCountChange(instrumentId, desired);
+                    socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
+                    requestInstrumentStepCountChange(instrumentId, desired, { skipFullRender: true });
                 }
                 manualStepState.editing = false;
                 return;
@@ -318,7 +751,8 @@ export function ensureInstrumentCard(instrument) {
         if (!manualStepState.editing && stepNumberInput.value !== '') {
             const desired = clampStepCount(stepNumberInput.value);
             stepNumberInput.value = String(desired);
-            requestInstrumentStepCountChange(instrumentId, desired);
+            socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
+            requestInstrumentStepCountChange(instrumentId, desired, { skipFullRender: true });
         }
     });
 
@@ -345,7 +779,8 @@ export function ensureInstrumentCard(instrument) {
         }
         const desired = clampStepCount(stepNumberInput.value);
         stepNumberInput.value = String(desired);
-        requestInstrumentStepCountChange(instrumentId, desired);
+        socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
+        requestInstrumentStepCountChange(instrumentId, desired, { skipFullRender: true });
     });
 
     stepNumberInput.addEventListener('blur', () => {
@@ -436,6 +871,9 @@ export function updateInstrumentCard(card, instrument) {
 }
 
 export function removeInstrumentCard(instrumentId) {
+    if (activePitchPopup) {
+        closePitchPopup({ commit: false });
+    }
     const entry = socketState.instrumentElements.get(instrumentId);
     if (!entry) {
         return;
@@ -745,12 +1183,9 @@ function appendSamplerRangeControl(container, instrumentId, slotId, options) {
 
     input.addEventListener('input', () => {
         const parsed = clampValue(Number(input.value), min, max);
+        input.value = String(parsed);
         badge.textContent = format(parsed);
-    });
-
-    input.addEventListener('change', () => {
-        const parsed = clampValue(Number(input.value), min, max);
-        badge.textContent = format(parsed);
+        socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
         if (typeof api.onCommit === 'function') {
             api.onCommit(parsed);
         } else {
@@ -776,6 +1211,7 @@ function appendSamplerToggleControl(container, instrumentId, slotId, options) {
     checkbox.checked = Boolean(value);
     checkbox.addEventListener('change', () => {
         const next = Boolean(checkbox.checked);
+        socketState.suppressedInstrumentUpdates.set(instrumentId, Date.now() + 250);
         updateSamplerSlotLocal(instrumentId, slotId, { [key]: next });
         emitSamplerParamUpdate(instrumentId, slotId, { [key]: next });
     });
@@ -992,10 +1428,6 @@ export function renderParamControls(container, instrument, definition) {
             valueBadge.style.opacity = '0.8';
 
             input.addEventListener('input', () => {
-                valueBadge.textContent = formatParamDisplay(input.value, paramDef);
-            });
-
-            input.addEventListener('change', () => {
                 let numericValue = Number(input.value);
                 if (!Number.isFinite(numericValue)) {
                     const resetValue = resolveInstrumentParamValue(instrument, paramDef);
@@ -1008,12 +1440,53 @@ export function renderParamControls(container, instrument, definition) {
                 input.value = String(numericValue);
                 valueBadge.textContent = formatParamDisplay(numericValue, paramDef);
 
+                if (!instrument.params || typeof instrument.params !== 'object') {
+                    instrument.params = {};
+                }
+
+                if (instrument.type === SynthTypes.TR808) {
+                    if (paramDef.key === 'tone') {
+                        instrument.params.tone = numericValue;
+                        instrument.params.hatTone = numericValue;
+                        if (!instrument.params.hat || typeof instrument.params.hat !== 'object') {
+                            instrument.params.hat = {};
+                        }
+                        instrument.params.hat.tone = numericValue;
+                    } else if (paramDef.key === 'volume') {
+                        instrument.params.volume = numericValue;
+                        if (!instrument.params.master || typeof instrument.params.master !== 'object') {
+                            instrument.params.master = {};
+                        }
+                        instrument.params.master.volume = numericValue;
+                    } else if (paramDef.key === 'kickLevel' || paramDef.key === 'snareLevel' || paramDef.key === 'hatLevel' || paramDef.key === 'clapLevel') {
+                        instrument.params[paramDef.key] = numericValue;
+                        const groupMap = {
+                            kickLevel: 'kick',
+                            snareLevel: 'snare',
+                            hatLevel: 'hat',
+                            clapLevel: 'clap',
+                        };
+                        const groupKey = groupMap[paramDef.key];
+                        if (groupKey) {
+                            if (!instrument.params[groupKey] || typeof instrument.params[groupKey] !== 'object') {
+                                instrument.params[groupKey] = {};
+                            }
+                            instrument.params[groupKey].level = numericValue;
+                        }
+                    } else {
+                        instrument.params[paramDef.key] = numericValue;
+                    }
+                } else {
+                    instrument.params[paramDef.key] = numericValue;
+                }
+
                 const paramsPayload = createInstrumentParamUpdate(instrument, paramDef, numericValue);
                 if (!paramsPayload) {
                     return;
                 }
 
                 if (!socket) return;
+                socketState.suppressedInstrumentUpdates.set(instrument.id, Date.now() + 250);
                 socket.emit('instrument:param', {
                     instrumentId: instrument.id,
                     params: paramsPayload,
@@ -1074,6 +1547,9 @@ export function createInstrumentParamUpdate(instrument, paramDef, value) {
 
 // Step grid rendering
 export function renderStepGrid(container, instrument) {
+    if (activePitchPopup) {
+        closePitchPopup({ commit: false });
+    }
     if (instrument.type === SynthTypes.TR808) {
         renderDrumStepGrid(container, instrument);
     } else if (instrument.type === SynthTypes.SAMPLER) {
@@ -1145,28 +1621,34 @@ export function renderMelodicStepGrid(container, instrument) {
         }
 
         const pitchSelect = createPitchSelect(step.pitch || 'C3');
+        const initialPitch = step.pitch || pitchSelect.dataset.pitch || 'C3';
+        pitchSelect.dataset.pitch = initialPitch;
+        pitchSelect.textContent = initialPitch;
         if (withinPattern) {
-            const resolvedInitial = pitchSelect.value;
-            step.pitch = resolvedInitial;
-            note.textContent = resolvedInitial;
-            pitchSelect.addEventListener('change', (event) => {
+            step.pitch = initialPitch;
+            note.textContent = initialPitch;
+            const handlePitchPopupTrigger = (event) => {
+                event.preventDefault();
                 event.stopPropagation();
-                const selectedNote = pitchSelect.value;
-                step.pitch = selectedNote;
-                note.textContent = selectedNote;
-                if (!socket) return;
-                socket.emit('instrument:step', {
+                openPitchPopup({
+                    anchorEl: pitchSelect,
+                    noteEl: note,
+                    selectEl: pitchSelect,
+                    step,
                     instrumentId: instrument.id,
                     stepIndex: patternIndex,
-                    step: { pitch: selectedNote },
                 });
+            };
+            pitchSelect.addEventListener('click', handlePitchPopupTrigger);
+            pitchSelect.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    handlePitchPopupTrigger(event);
+                }
             });
         } else {
             pitchSelect.disabled = true;
             pitchSelect.classList.add('step-select-disabled');
         }
-
-        pitchSelect.addEventListener('click', (event) => event.stopPropagation());
 
         cell.appendChild(toggleBtn);
         cell.appendChild(pitchSelect);

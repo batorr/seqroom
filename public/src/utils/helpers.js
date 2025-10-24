@@ -185,16 +185,11 @@ export function createDefaultSamplerSlot(slotId) {
 
 // UI helpers
 export function createPitchSelect(selected) {
-    const select = document.createElement('select');
-    select.className = 'step-pitch-select';
-    NOTE_OPTIONS.forEach((note) => {
-        const option = document.createElement('option');
-        option.value = note;
-        option.textContent = note;
-        select.appendChild(option);
-    });
-    if (NOTE_OPTIONS.includes(selected)) {
-        select.value = selected;
-    }
-    return select;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'step-pitch-select';
+    const initial = NOTE_OPTIONS.includes(selected) ? selected : 'C3';
+    button.dataset.pitch = initial;
+    button.textContent = initial;
+    return button;
 }

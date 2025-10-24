@@ -334,10 +334,13 @@ audioState = {
 socketState = {
   instrumentElements: Map<id, element>,
   pendingRoomRequest: boolean,
+  roomRequestTimeoutId: number | null,
+  pendingRoomRequestMeta: { mode: 'create' | 'join', roomId: string } | null,
   pendingPings: Map<id, {clientSendTime}>,
   clockOffsetMs: number,
   latencyEstimateMs: number,
-  hasSyncSample: boolean
+  hasSyncSample: boolean,
+  suppressedInstrumentUpdates: Map<instrumentId, number>
 }
 ```
 
@@ -429,7 +432,7 @@ socketState = {
 **Instrument Interaction**:
 - `setActiveInstrument(instrumentId)` - Set active instrument
 - `updateActiveInstrumentHighlight()` - Update visual highlighting
-- `requestInstrumentStepCountChange(instrumentId, nextStepCount)` - Change step count
+- `requestInstrumentStepCountChange(instrumentId, nextStepCount, options)` - Change step count (optional `{ skipFullRender }` to avoid full card redraw)
 
 **Parameter Controls**:
 - `renderParamControls(container, instrument, definition)` - Render parameter sliders/selects

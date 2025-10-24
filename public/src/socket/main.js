@@ -97,6 +97,13 @@ export function setupSocketEvents() {
         const normalized = normalizeInstrument(instrument);
         state.instruments.set(normalized.id, normalized);
         prepareSamplerAudio(normalized);
+        const suppressionExpiry = socketState.suppressedInstrumentUpdates.get(normalized.id);
+        if (suppressionExpiry && suppressionExpiry > Date.now()) {
+            return;
+        }
+        if (suppressionExpiry) {
+            socketState.suppressedInstrumentUpdates.delete(normalized.id);
+        }
         renderInstrument(normalized.id);
     });
 
@@ -361,6 +368,7 @@ export function leaveRoom() {
     socketState.clockOffsetMs = 0;
     socketState.latencyEstimateMs = 0;
     socketState.hasSyncSample = false;
+    socketState.suppressedInstrumentUpdates.clear();
 
     stopAudioScheduler();
     renderInstruments();
