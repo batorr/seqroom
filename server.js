@@ -263,6 +263,7 @@ function createInstrument(type, options = {}) {
     type,
     name: sanitizeInstrumentName(options.name, type),
     createdAt: Date.now(),
+    lockedBy: null,
     params: createDefaultParams(type),
     stepCount: initialStepCount,
     steps: createStepSequence(type, initialStepCount),
@@ -345,6 +346,12 @@ function cloneInstrument(instrument) {
   }
 
   instrument.name = sanitizeInstrumentName(instrument.name, instrument.type);
+  const normalizedLockOwner = typeof instrument.lockedBy === 'string' && instrument.lockedBy.trim().length
+    ? instrument.lockedBy
+    : null;
+  if (instrument.lockedBy !== normalizedLockOwner) {
+    instrument.lockedBy = normalizedLockOwner;
+  }
 
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
   instrument.stepCount = normalizedStepCount;
@@ -354,6 +361,7 @@ function cloneInstrument(instrument) {
     type: instrument.type,
     name: instrument.name,
     createdAt: instrument.createdAt,
+    lockedBy: normalizedLockOwner,
     params: instrument.params,
     stepCount: normalizedStepCount,
     steps: instrument.steps.map((step) => {
@@ -396,6 +404,60 @@ function cloneInstrument(instrument) {
   }
 
   return base;
+}
+
+function findInstrumentByIdentifier(room, identifier) {
+  if (!room || !identifier) {
+    return null;
+  }
+
+  let lookup = identifier;
+  if (typeof lookup === 'object' && lookup !== null) {
+    lookup = lookup.instrumentId || lookup.synthName || lookup.name || null;
+  }
+
+  if (typeof lookup !== 'string') {
+    return null;
+  }
+
+  const trimmed = lookup.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (room.instruments.has(trimmed)) {
+    return room.instruments.get(trimmed);
+  }
+
+  for (const instrument of room.instruments.values()) {
+    if (instrument.name === trimmed) {
+      return instrument;
+    }
+  }
+
+  return null;
+}
+
+function isInstrumentLockedByOther(instrument, socketId) {
+  if (!instrument || !instrument.lockedBy) {
+    return false;
+  }
+  return instrument.lockedBy !== socketId;
+}
+
+function releaseInstrumentLocks(room, socketId) {
+  if (!room || !socketId) {
+    return [];
+  }
+
+  const released = [];
+  for (const instrument of room.instruments.values()) {
+    if (instrument.lockedBy === socketId) {
+      instrument.lockedBy = null;
+      released.push(instrument);
+    }
+  }
+  return released;
 }
 
 function ensureInstrumentStepCapacity(instrument, stepCount) {
@@ -1091,6 +1153,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (isInstrumentLockedByOther(instrument, socket.id)) {
+      respond({ ok: false, error: 'instrument-locked', lockedBy: instrument.lockedBy });
+      return;
+    }
+
     const nextStepCount = clampStepCount(stepCount);
     if (instrument.stepCount === nextStepCount) {
       respond({ ok: true, stepCount: instrument.stepCount });
@@ -1135,8 +1202,19 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (typeof instrumentId !== 'string' || !room.instruments.has(instrumentId)) {
+    if (typeof instrumentId !== 'string') {
       respond({ ok: false, error: 'instrument-not-found' });
+      return;
+    }
+
+    const instrument = room.instruments.get(instrumentId);
+    if (!instrument) {
+      respond({ ok: false, error: 'instrument-not-found' });
+      return;
+    }
+
+    if (isInstrumentLockedByOther(instrument, socket.id)) {
+      respond({ ok: false, error: 'instrument-locked', lockedBy: instrument.lockedBy });
       return;
     }
 
@@ -1159,6 +1237,11 @@ io.on('connection', (socket) => {
 
     const instrument = room.instruments.get(instrumentId);
     if (!instrument) {
+      return;
+    }
+
+    if (isInstrumentLockedByOther(instrument, socket.id)) {
+      socket.emit('lockFailed', { synthName: instrument.name, instrumentId: instrument.id, lockedBy: instrument.lockedBy, reason: 'locked' });
       return;
     }
 
@@ -1185,6 +1268,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (isInstrumentLockedByOther(instrument, socket.id)) {
+      respond({ ok: false, error: 'instrument-locked', lockedBy: instrument.lockedBy });
+      return;
+    }
+
     const sanitizedName = sanitizeInstrumentName(name, instrument.type);
     if (instrument.name === sanitizedName) {
       respond({ ok: true, name: sanitizedName });
@@ -1208,6 +1296,11 @@ io.on('connection', (socket) => {
 
     const instrument = room.instruments.get(instrumentId);
     if (!instrument) {
+      return;
+    }
+
+    if (isInstrumentLockedByOther(instrument, socket.id)) {
+      socket.emit('lockFailed', { synthName: instrument.name, instrumentId: instrument.id, lockedBy: instrument.lockedBy, reason: 'locked' });
       return;
     }
 
@@ -1251,6 +1344,56 @@ io.on('connection', (socket) => {
     broadcastInstrumentState(room.id, instrumentId);
   });
 
+  socket.on('lockSynth', (payload) => {
+    const room = getRoomForSocket(socket);
+    if (!room) {
+      return;
+    }
+
+    const instrument = findInstrumentByIdentifier(room, payload);
+    const requestedRaw = typeof payload === 'string'
+      ? payload
+      : (payload && (payload.synthName || payload.instrumentId || payload.name)) || null;
+    const requested = typeof requestedRaw === 'string' ? requestedRaw.trim() : null;
+
+    if (!instrument) {
+      if (requested) {
+        socket.emit('lockFailed', { synthName: requested, reason: 'not-found' });
+      }
+      return;
+    }
+
+    if (instrument.lockedBy && instrument.lockedBy !== socket.id) {
+      socket.emit('lockFailed', { synthName: instrument.name, lockedBy: instrument.lockedBy, reason: 'locked' });
+      return;
+    }
+
+    if (instrument.lockedBy === socket.id) {
+      socket.emit('synthLocked', { synthName: instrument.name, instrumentId: instrument.id, lockedBy: socket.id });
+      return;
+    }
+
+    instrument.lockedBy = socket.id;
+    broadcastInstrumentState(room.id, instrument.id);
+    io.to(room.id).emit('synthLocked', { synthName: instrument.name, instrumentId: instrument.id, lockedBy: socket.id });
+  });
+
+  socket.on('unlockSynth', (payload) => {
+    const room = getRoomForSocket(socket);
+    if (!room) {
+      return;
+    }
+
+    const instrument = findInstrumentByIdentifier(room, payload);
+    if (!instrument || instrument.lockedBy !== socket.id) {
+      return;
+    }
+
+    instrument.lockedBy = null;
+    broadcastInstrumentState(room.id, instrument.id);
+    io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
+  });
+
   socket.on('time:pong', ({ id, clientSendTime }) => {
     if (typeof id !== 'number' || !Number.isFinite(clientSendTime)) {
       return;
@@ -1274,6 +1417,15 @@ io.on('connection', (socket) => {
     const { roomId } = socket.data;
     if (!roomId) {
       return;
+    }
+
+    const room = rooms.get(roomId);
+    if (room) {
+      const released = releaseInstrumentLocks(room, socket.id);
+      for (const instrument of released) {
+        broadcastInstrumentState(room.id, instrument.id);
+        io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
+      }
     }
 
     socket.data.roomId = undefined;
@@ -1348,6 +1500,15 @@ async function leaveCurrentRoom(socket) {
   const { roomId } = socket.data;
   if (!roomId) {
     return;
+  }
+
+  const room = rooms.get(roomId);
+  if (room) {
+    const released = releaseInstrumentLocks(room, socket.id);
+    for (const instrument of released) {
+      broadcastInstrumentState(room.id, instrument.id);
+      io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
+    }
   }
 
   try {

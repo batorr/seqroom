@@ -152,6 +152,20 @@ function clampOctave(value) {
     return Math.min(PITCH_OCTAVE_MAX, Math.max(PITCH_OCTAVE_MIN, Math.round(value)));
 }
 
+function setLockedDisabled(element, locked) {
+    if (!element) {
+        return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(element.dataset || {}, 'lockInitialDisabled')) {
+        element.dataset.lockInitialDisabled = element.disabled ? 'true' : 'false';
+    }
+    if (locked) {
+        element.disabled = true;
+    } else {
+        element.disabled = element.dataset.lockInitialDisabled === 'true';
+    }
+}
+
 function parsePitchValue(pitch) {
     const fallback = { noteIndex: 0, octave: 3 };
     if (typeof pitch !== 'string' || !pitch.length) {
@@ -443,6 +457,27 @@ import('../socket/main.js').then((module) => {
     socket = module.socket;
 });
 
+function getCurrentSocketId() {
+    return socket && typeof socket.id === 'string' ? socket.id : null;
+}
+
+function handleLockToggle(instrumentId) {
+    if (!socket) {
+        return;
+    }
+    const latest = state.instruments.get(instrumentId);
+    if (!latest) {
+        return;
+    }
+    const lockOwner = typeof latest.lockedBy === 'string' && latest.lockedBy.length ? latest.lockedBy : null;
+    const socketId = getCurrentSocketId();
+    if (lockOwner && lockOwner === socketId) {
+        socket.emit('unlockSynth', { instrumentId });
+        return;
+    }
+    socket.emit('lockSynth', { instrumentId });
+}
+
 // Render functions
 export function renderInstrument(instrumentId) {
     if (activePitchPopup) {
@@ -551,6 +586,7 @@ function refreshInstrumentStepUI(instrumentId) {
         return;
     }
     renderStepGrid(entry.stepGrid, instrument);
+    updateInstrumentLockState(entry, instrument);
     refreshPlaybackIndicatorsView();
 }
 
@@ -772,6 +808,8 @@ export function ensureInstrumentCard(instrument) {
         nameEl: node.querySelector('.instrument-name'),
         renameButton: node.querySelector('.rename-instrument'),
         renameInput: null,
+        removeButton: removeBtn,
+        lockButton: null,
     };
 
     if (cardEntry.renameButton) {
@@ -836,7 +874,27 @@ export function ensureInstrumentCard(instrument) {
 
     stepControl.append(stepLabel, stepSlider, stepNumberInput, stepValue, presetContainer);
     controlsRow.appendChild(stepControl);
+
     node.insertBefore(controlsRow, cardEntry.paramsContainer);
+
+    const lockButton = document.createElement('button');
+    lockButton.type = 'button';
+    lockButton.className = 'instrument-lock-button';
+    lockButton.textContent = 'Lock';
+    lockButton.setAttribute('aria-label', 'Lock instrument');
+    lockButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (state.activeInstrumentId !== instrument.id) {
+            setActiveInstrument(instrument.id);
+        }
+        handleLockToggle(instrument.id);
+    });
+
+    const nameGroup = node.querySelector('.synth-name-group');
+    if (nameGroup) {
+        nameGroup.appendChild(lockButton);
+    }
+    cardEntry.lockButton = lockButton;
 
     const instrumentId = instrument.id;
     const getCurrentStepCount = () => {
@@ -964,6 +1022,97 @@ export function ensureInstrumentCard(instrument) {
     return node;
 }
 
+function updateInstrumentLockState(entry, instrument) {
+    if (!entry || !instrument) {
+        return;
+    }
+
+    const lockOwner = typeof instrument.lockedBy === 'string' && instrument.lockedBy.length
+        ? instrument.lockedBy
+        : null;
+    const socketId = getCurrentSocketId();
+    const isLocked = Boolean(lockOwner);
+    const isOwner = isLocked && socketId === lockOwner;
+    const lockedByOther = isLocked && !isOwner;
+
+    if (entry.lockButton) {
+        let label = 'Lock';
+        let ariaLabel = 'Lock instrument';
+        if (isOwner) {
+            label = 'Unlock';
+        } else if (lockedByOther) {
+            label = 'Locked';
+        }
+        entry.lockButton.textContent = label;
+        entry.lockButton.disabled = lockedByOther;
+        entry.lockButton.classList.toggle('is-locked', isLocked);
+        entry.lockButton.classList.toggle('is-owned', isOwner);
+        entry.lockButton.title = lockedByOther && lockOwner
+            ? `Locked by ${lockOwner}`
+            : isOwner ? 'You currently control this synth' : 'Request exclusive control of this synth';
+        if (isOwner) {
+            ariaLabel = 'Unlock instrument';
+        } else if (lockedByOther && lockOwner) {
+            ariaLabel = `Instrument locked by ${lockOwner}`;
+        }
+        entry.lockButton.setAttribute('aria-label', ariaLabel);
+    }
+
+    if (entry.root) {
+        entry.root.classList.toggle('is-locked', isLocked);
+        entry.root.classList.toggle('is-locked-by-self', isOwner);
+        entry.root.classList.toggle('is-locked-by-other', lockedByOther);
+        if (isLocked) {
+            entry.root.dataset.lockedBy = lockOwner;
+        } else {
+            delete entry.root.dataset.lockedBy;
+        }
+    }
+
+    const disableControls = lockedByOther;
+
+    setLockedDisabled(entry.removeButton, disableControls);
+    setLockedDisabled(entry.renameButton, disableControls);
+    if (entry.renameInput) {
+        setLockedDisabled(entry.renameInput, disableControls);
+    }
+
+    if (entry.stepControl) {
+        setLockedDisabled(entry.stepControl.slider, disableControls);
+        setLockedDisabled(entry.stepControl.input, disableControls);
+        if (Array.isArray(entry.stepControl.presets)) {
+            entry.stepControl.presets.forEach((button) => setLockedDisabled(button, disableControls));
+        }
+    }
+
+    if (entry.paramsContainer) {
+        entry.paramsContainer.querySelectorAll('input, select, textarea, button').forEach((control) => {
+            setLockedDisabled(control, disableControls);
+        });
+    }
+
+    if (entry.stepRefs) {
+        entry.stepRefs.forEach((ref) => {
+            if (ref.toggleBtn) {
+                setLockedDisabled(ref.toggleBtn, disableControls);
+                ref.disabled = ref.toggleBtn.disabled;
+            } else if (typeof ref.disabled !== 'boolean') {
+                ref.disabled = disableControls;
+            }
+            if (ref.pitchSelect) {
+                setLockedDisabled(ref.pitchSelect, disableControls);
+                if (!ref.baseDisabled) {
+                    ref.pitchSelect.classList.toggle('step-select-disabled', ref.pitchSelect.disabled);
+                }
+            }
+        });
+    }
+
+    if (entry.stepGrid) {
+        entry.stepGrid.classList.toggle('locked', disableControls);
+    }
+}
+
 export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
@@ -975,6 +1124,9 @@ export function updateInstrumentCard(card, instrument) {
 
     if (entry) {
         entry.nameEl = card.querySelector('.instrument-name');
+        if (!entry.lockButton) {
+            entry.lockButton = card.querySelector('.instrument-lock-button');
+        }
     }
     const titleEl = entry?.nameEl || card.querySelector('.instrument-name');
     const typeEl = card.querySelector('.synth-meta span');
@@ -1027,6 +1179,8 @@ export function updateInstrumentCard(card, instrument) {
 
     const stepGrid = entry.stepGrid;
     renderStepGrid(stepGrid, instrument);
+
+    updateInstrumentLockState(entry, instrument);
 }
 
 export function removeInstrumentCard(instrumentId) {
@@ -1103,6 +1257,7 @@ function renderDrumSelector(entry, instrument) {
             entry.activeDrum = drum.id;
             renderDrumSelector(entry, instrument);
             renderStepGrid(entry.stepGrid, instrument);
+            updateInstrumentLockState(entry, instrument);
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
                 updatePlaybackIndicators(getCurrentStepIndex());
             });
@@ -1148,6 +1303,7 @@ function renderSamplerSelector(entry, instrument, definition) {
             renderSamplerSelector(entry, instrument, definition);
             renderParamControls(entry.paramsContainer, instrument, definition);
             renderStepGrid(entry.stepGrid, instrument);
+            updateInstrumentLockState(entry, instrument);
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
                 updatePlaybackIndicators(getCurrentStepIndex());
             });
@@ -1820,7 +1976,14 @@ export function renderMelodicStepGrid(container, instrument) {
         cell.appendChild(pitchSelect);
         container.appendChild(cell);
 
-        stepRefs.push({ cell, toggleBtn, pitchSelect, disabled: !withinPattern });
+        const baseDisabled = !withinPattern;
+        stepRefs.push({
+            cell,
+            toggleBtn,
+            pitchSelect,
+            disabled: baseDisabled,
+            baseDisabled,
+        });
     }
 
     if (entry) {
@@ -1917,7 +2080,14 @@ export function renderDrumStepGrid(container, instrument) {
         cell.appendChild(toggleBtn);
         container.appendChild(cell);
 
-        stepRefs.push({ cell, toggleBtn, indicator, disabled: !withinPattern });
+        const baseDisabled = !withinPattern;
+        stepRefs.push({
+            cell,
+            toggleBtn,
+            indicator,
+            disabled: baseDisabled,
+            baseDisabled,
+        });
     }
 
     if (entry) {
@@ -1994,7 +2164,14 @@ export function renderSamplerStepGrid(container, instrument) {
 
         cell.appendChild(toggleBtn);
         container.appendChild(cell);
-        stepRefs.push({ cell, toggleBtn, indicator, disabled: !withinPattern });
+        const baseDisabled = !withinPattern;
+        stepRefs.push({
+            cell,
+            toggleBtn,
+            indicator,
+            disabled: baseDisabled,
+            baseDisabled,
+        });
     }
 
     entry.stepRefs = stepRefs;

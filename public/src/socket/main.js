@@ -1,7 +1,7 @@
 // Socket.IO Communication Module
 // WebSocket event handling and room management
 
-import { state, hydrateState, normalizeInstrument } from '../state/main.js';
+import { state, hydrateState, normalizeInstrument, setInstrumentLockedBy } from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { clampTempo, generateRoomId, normalizeRoomId } from '../utils/helpers.js';
@@ -131,6 +131,39 @@ export function setupSocketEvents() {
         renderInstruments();
     });
 
+    socket.on('synthLocked', ({ instrumentId, synthName, lockedBy }) => {
+        const targetId = resolveInstrumentId({ instrumentId, synthName });
+        if (!targetId) {
+            return;
+        }
+        setInstrumentLockedBy(targetId, lockedBy);
+        renderInstrument(targetId);
+    });
+
+    socket.on('synthUnlocked', ({ instrumentId, synthName }) => {
+        const targetId = resolveInstrumentId({ instrumentId, synthName });
+        if (!targetId) {
+            return;
+        }
+        setInstrumentLockedBy(targetId, null);
+        renderInstrument(targetId);
+    });
+
+    socket.on('lockFailed', ({ instrumentId, synthName, lockedBy, reason }) => {
+        const targetId = resolveInstrumentId({ instrumentId, synthName });
+        if (targetId) {
+            if (lockedBy) {
+                setInstrumentLockedBy(targetId, lockedBy);
+            }
+            renderInstrument(targetId);
+        }
+        if (reason === 'locked') {
+            console.warn(`Lock rejected: ${synthName || instrumentId || 'instrument'} is controlled by another user.`);
+        } else {
+            console.warn(`Lock request failed${reason ? `: ${reason}` : ''}.`);
+        }
+    });
+
     socket.on('time:ping', ({ id }) => {
         if (typeof id !== 'number') {
             return;
@@ -186,6 +219,19 @@ export function setupSocketEvents() {
         instrument.steps[index].active = Boolean(active);
         renderInstrument(targetInstrumentId);
     });
+}
+
+function resolveInstrumentId({ instrumentId, synthName }) {
+    if (instrumentId && state.instruments.has(instrumentId)) {
+        return instrumentId;
+    }
+    if (typeof synthName === 'string' && synthName.trim().length) {
+        const match = Array.from(state.instruments.values()).find((instrument) => instrument.name === synthName.trim());
+        if (match) {
+            return match.id;
+        }
+    }
+    return null;
 }
 
 // Setup room control event listeners

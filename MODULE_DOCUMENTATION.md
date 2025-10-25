@@ -262,7 +262,7 @@ state = {
   isInRoom: false,
   roomId: null,
   transport: { bpm, playing, sessionStartTime, lastScheduledStart },
-  instruments: Map<id, instrument>,
+  instruments: Map<id, instrument>, // instrument.lockedBy: string | null
   instrumentOrder: string[],
   activeInstrumentId: string | null,
   tempoPreview: number,
@@ -272,7 +272,7 @@ state = {
 }
 ```
 
-**State Mutations** (10 functions):
+**State Mutations** (11 functions):
 - `setRoomId(roomId)` - Set current room
 - `setTransportPlaying(playing)` - Set play/stop state
 - `setTempo(bpm)` - Set tempo
@@ -282,12 +282,13 @@ state = {
 - `setSidebarOpen(isOpen)` - Update overlay sidebar visibility
 - `updateInstrumentParams(instrumentId, params)` - Update instrument parameters
 - `updateInstrumentName(instrumentId, name)` - Update instrument display name
+- `setInstrumentLockedBy(instrumentId, lockedBy)` - Track synth lock ownership per instrument
 
 **State Hydration**:
 - `hydrateState(payload)` - Load complete state from server
 
 **Normalization Functions** (5 functions):
-- `normalizeInstrument(instrument)` - Validate and normalize instrument data
+- `normalizeInstrument(instrument)` - Validate and normalize instrument data (ensures `lockedBy` is socketId or null)
 - `normalizeSamplerParams(params)` - Normalize sampler slot parameters
 - `normalizeSamplerSample(sample)` - Validate sample data
 - `normalizeSamplerStep(step)` - Normalize sampler step
@@ -480,6 +481,7 @@ socketState = {
 - Drag & drop support for sample loading
 - Base64 encoding for sample transfer
 - Inline instrument renaming with optimistic UI update and server acknowledgment
+- Adds synth lock toggle per instrument card; disables parameter/step controls when another user holds the lock
 
 **Verification**: ✅ Complex but well-structured, handles all instrument types correctly
 
@@ -984,6 +986,15 @@ Map<key, {
 - `instrument:order` - Instrument order changed
   - Updates order array
   - Re-renders all instruments
+- `synthLocked` - Synth lock granted
+  - Records lock owner by socket id
+  - Updates UI to reflect exclusive control
+- `synthUnlocked` - Synth lock released
+  - Clears local lock owner
+  - Re-enables instrument controls
+- `lockFailed` - Lock request rejected
+  - Displays denial reason (locked/not-found)
+  - Leaves existing lock state untouched
 
 **Clock Synchronization**:
 - `time:ping` - Server ping request
@@ -1026,6 +1037,8 @@ Map<key, {
 - `transport:stop` - Stop playback
 - `transport:set-tempo` - Change tempo
 - `instrument:add` - Add instrument
+- `lockSynth` - Request exclusive control of a synth
+- `unlockSynth` - Release synth lock if owned
 - Various instrument update events
 
 **Dependencies**:
@@ -1038,6 +1051,7 @@ Map<key, {
 
 **Implementation Notes**:
 - Socket.IO client created with `autoConnect: false`
+- Synth lock workflow uses `lockSynth`/`unlockSynth` events; server broadcasts `synthLocked`/`synthUnlocked` and auto-releases locks on disconnect
 - Must explicitly connect when joining/creating room
 - Clock sync uses ping-pong protocol
 - Exponential moving average for smooth clock correction

@@ -666,7 +666,8 @@
         color: rgba(148, 163, 184, 0.8);
       }
 
-      .rename-instrument {
+      .rename-instrument,
+      .instrument-lock-button {
         appearance: none;
         border: 1px solid rgba(148, 163, 184, 0.28);
         background: rgba(148, 163, 184, 0.15);
@@ -680,14 +681,28 @@
         transition: background 120ms ease, border 120ms ease, transform 120ms ease;
       }
 
-      .rename-instrument:hover {
+      .rename-instrument:hover,
+      .instrument-lock-button:hover {
         background: rgba(148, 163, 184, 0.25);
         border-color: rgba(148, 163, 184, 0.45);
         transform: translateY(-1px);
       }
 
-      .rename-instrument:active {
+      .rename-instrument:active,
+      .instrument-lock-button:active {
         transform: translateY(1px);
+      }
+
+      .instrument-lock-button.is-owned {
+        background: rgba(45, 212, 191, 0.22);
+        border-color: rgba(20, 184, 166, 0.5);
+        color: rgba(204, 251, 241, 0.95);
+      }
+
+      .instrument-lock-button.is-locked:not(.is-owned) {
+        background: rgba(248, 113, 113, 0.15);
+        border-color: rgba(239, 68, 68, 0.45);
+        color: rgba(254, 202, 202, 0.9);
       }
 
       .instrument-name-input {

@@ -194,15 +194,29 @@ export function normalizeInstrument(instrument) {
 
     const normalizedName = sanitizeInstrumentName(instrument.name, instrument.type);
 
+    const normalizedLockOwner = typeof instrument.lockedBy === 'string' && instrument.lockedBy.trim().length
+        ? instrument.lockedBy.trim()
+        : null;
+
     return {
         id: instrument.id,
         type: instrument.type,
         name: normalizedName,
         createdAt: instrument.createdAt,
+        lockedBy: normalizedLockOwner,
         params: normalizedParams,
         stepCount: normalizedStepCount,
         steps: normalizedSteps,
     };
+}
+
+export function setInstrumentLockedBy(instrumentId, lockedBy) {
+    const instrument = state.instruments.get(instrumentId);
+    if (!instrument) {
+        return;
+    }
+    const normalized = typeof lockedBy === 'string' && lockedBy.trim().length ? lockedBy.trim() : null;
+    instrument.lockedBy = normalized;
 }
 
 // Normalize sampler-specific data
