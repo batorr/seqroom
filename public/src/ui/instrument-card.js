@@ -29,6 +29,155 @@ const PITCH_OCTAVE_MAX = 7;
 let activePitchPopup = null;
 let pitchPopupStylesInjected = false;
 
+const COLLAPSE_STORAGE_PREFIX = 'seqroom:collapsed:';
+
+function getCollapseStorageKey(instrumentId) {
+    if (instrumentId === null || instrumentId === undefined) {
+        return null;
+    }
+    return `${COLLAPSE_STORAGE_PREFIX}${instrumentId}`;
+}
+
+export function loadCollapsedState(instrumentId) {
+    const key = getCollapseStorageKey(instrumentId);
+    if (!key) {
+        return false;
+    }
+    if (typeof window === 'undefined' || !window.localStorage) {
+        return false;
+    }
+    try {
+        const value = window.localStorage.getItem(key);
+        return value === 'true';
+    } catch (error) {
+        return false;
+    }
+}
+
+export function saveCollapsedState(instrumentId, collapsed) {
+    const key = getCollapseStorageKey(instrumentId);
+    if (!key) {
+        return;
+    }
+    if (typeof window === 'undefined' || !window.localStorage) {
+        return;
+    }
+    try {
+        window.localStorage.setItem(key, collapsed ? 'true' : 'false');
+    } catch (error) {
+        // Ignore storage access issues
+    }
+}
+
+function removeCollapsedState(instrumentId) {
+    const key = getCollapseStorageKey(instrumentId);
+    if (!key) {
+        return;
+    }
+    if (typeof window === 'undefined' || !window.localStorage) {
+        return;
+    }
+    try {
+        window.localStorage.removeItem(key);
+    } catch (error) {
+        // Ignore storage access issues
+    }
+}
+
+function sanitizeForDomId(value) {
+    return String(value ?? '')
+        .replace(/[^A-Za-z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+/, '')
+        .replace(/-+$/, '');
+}
+
+function hashForDom(value) {
+    const text = String(value ?? '');
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(36);
+}
+
+function getSynthBodyId(instrumentId) {
+    const sanitized = sanitizeForDomId(instrumentId);
+    const hash = hashForDom(instrumentId);
+    const base = sanitized || 'body';
+    return `synth-body-${base}-${hash}`;
+}
+
+function ensureCollapseBindings(entry, instrumentId) {
+    if (!entry) {
+        return;
+    }
+
+    const body = entry.bodyContainer || entry.root?.querySelector('.synth-body');
+    if (body && !entry.bodyContainer) {
+        entry.bodyContainer = body;
+    }
+    if (entry.bodyContainer) {
+        const storedInstrument = entry.bodyContainer.dataset.instrumentBodyId;
+        const expectedInstrument = String(instrumentId ?? '');
+        if (!entry.bodyContainer.id || storedInstrument !== expectedInstrument) {
+            const domId = getSynthBodyId(instrumentId);
+            entry.bodyContainer.id = domId;
+            entry.bodyContainer.dataset.instrumentBodyId = expectedInstrument;
+        }
+    }
+
+    const toggle = entry.collapseButton || entry.root?.querySelector('.collapse-toggle');
+    if (toggle && !entry.collapseButton) {
+        entry.collapseButton = toggle;
+    }
+
+    if (entry.collapseButton && entry.bodyContainer?.id) {
+        entry.collapseButton.setAttribute('aria-controls', entry.bodyContainer.id);
+    }
+}
+
+function applyCollapseState(entry, instrumentId, collapsed, { persist = false } = {}) {
+    if (!entry?.root) {
+        return;
+    }
+
+    ensureCollapseBindings(entry, instrumentId);
+    const isCollapsed = Boolean(collapsed);
+    entry.root.classList.toggle('collapsed', isCollapsed);
+
+    if (entry.bodyContainer) {
+        entry.bodyContainer.setAttribute('aria-hidden', isCollapsed ? 'true' : 'false');
+    }
+    if (entry.collapseButton) {
+        entry.collapseButton.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+        entry.collapseButton.setAttribute('aria-label', isCollapsed ? 'Expand instrument' : 'Collapse instrument');
+    }
+
+    entry.isCollapsed = isCollapsed;
+
+    if (persist) {
+        saveCollapsedState(instrumentId, isCollapsed);
+    }
+}
+
+function bindCollapseToggle(entry, instrumentId) {
+    if (!entry?.collapseButton) {
+        return;
+    }
+    if (entry.collapseButton.dataset.collapseBound === 'true') {
+        return;
+    }
+    entry.collapseButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        const currentEntry = socketState.instrumentElements.get(instrumentId) || entry;
+        const nextCollapsed = !(currentEntry.root?.classList.contains('collapsed'));
+        applyCollapseState(currentEntry, instrumentId, nextCollapsed, { persist: true });
+    });
+    entry.collapseButton.dataset.collapseBound = 'true';
+}
+
 // Helper functions
 export function getVisibleStepSlots(stepCount) {
     const effective = clampStepCount(stepCount ?? STEP_COUNT);
@@ -780,6 +929,9 @@ export function ensureInstrumentCard(instrument) {
     node.dataset.instrumentId = instrument.id;
     node.tabIndex = -1;
 
+    const bodyContainer = node.querySelector('.synth-body');
+    const collapseToggle = node.querySelector('.collapse-toggle');
+
     const removeBtn = node.querySelector('.remove-instrument');
     removeBtn.addEventListener('click', () => {
         if (!socket) return;
@@ -798,6 +950,8 @@ export function ensureInstrumentCard(instrument) {
 
     const cardEntry = {
         root: node,
+        bodyContainer,
+        collapseButton: collapseToggle,
         paramsContainer: node.querySelector('.synth-params'),
         stepGrid: node.querySelector('.step-grid'),
         stepRefs: [],
@@ -810,6 +964,7 @@ export function ensureInstrumentCard(instrument) {
         renameInput: null,
         removeButton: removeBtn,
         lockButton: null,
+        isCollapsed: false,
     };
 
     if (cardEntry.renameButton) {
@@ -875,7 +1030,14 @@ export function ensureInstrumentCard(instrument) {
     stepControl.append(stepLabel, stepSlider, stepNumberInput, stepValue, presetContainer);
     controlsRow.appendChild(stepControl);
 
-    node.insertBefore(controlsRow, cardEntry.paramsContainer);
+    if (cardEntry.paramsContainer) {
+        const parent = cardEntry.paramsContainer.parentElement || node;
+        parent.insertBefore(controlsRow, cardEntry.paramsContainer);
+    } else if (cardEntry.bodyContainer) {
+        cardEntry.bodyContainer.insertBefore(controlsRow, cardEntry.bodyContainer.firstChild);
+    } else {
+        node.appendChild(controlsRow);
+    }
 
     const lockButton = document.createElement('button');
     lockButton.type = 'button';
@@ -1015,9 +1177,21 @@ export function ensureInstrumentCard(instrument) {
     const drumSelector = document.createElement('div');
     drumSelector.className = 'drum-selector hidden';
     cardEntry.drumSelector = drumSelector;
-    node.insertBefore(drumSelector, cardEntry.stepGrid);
+    const stepGridParent = cardEntry.stepGrid?.parentElement || cardEntry.bodyContainer || node;
+    if (cardEntry.stepGrid && stepGridParent) {
+        stepGridParent.insertBefore(drumSelector, cardEntry.stepGrid);
+    } else if (stepGridParent) {
+        stepGridParent.appendChild(drumSelector);
+    }
 
     socketState.instrumentElements.set(instrument.id, cardEntry);
+
+    ensureCollapseBindings(cardEntry, instrument.id);
+    bindCollapseToggle(cardEntry, instrument.id);
+
+    const initialCollapsed = loadCollapsedState(instrument.id);
+    applyCollapseState(cardEntry, instrument.id, initialCollapsed, { persist: false });
+
     updateInstrumentCard(node, instrument);
     return node;
 }
@@ -1127,9 +1301,19 @@ export function updateInstrumentCard(card, instrument) {
         if (!entry.lockButton) {
             entry.lockButton = card.querySelector('.instrument-lock-button');
         }
+        if (!entry.bodyContainer) {
+            entry.bodyContainer = card.querySelector('.synth-body');
+        }
+        if (!entry.collapseButton) {
+            entry.collapseButton = card.querySelector('.collapse-toggle');
+        }
+        ensureCollapseBindings(entry, instrument.id);
+        bindCollapseToggle(entry, instrument.id);
+        const currentCollapsed = entry.isCollapsed ?? entry.root.classList.contains('collapsed');
+        applyCollapseState(entry, instrument.id, currentCollapsed, { persist: false });
     }
     const titleEl = entry?.nameEl || card.querySelector('.instrument-name');
-    const typeEl = card.querySelector('.synth-meta span');
+    const typeEl = card.querySelector('.synth-type');
     const displayName = instrument.name || definition.label;
     if (entry && entry.renameInput) {
         entry.renameInput.value = displayName;
@@ -1187,6 +1371,7 @@ export function removeInstrumentCard(instrumentId) {
     if (activePitchPopup) {
         closePitchPopup({ commit: false });
     }
+    removeCollapsedState(instrumentId);
     const entry = socketState.instrumentElements.get(instrumentId);
     if (!entry) {
         return;

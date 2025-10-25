@@ -515,6 +515,29 @@
         box-shadow: 0 24px 48px rgba(129, 140, 248, 0.35), 0 0 0 2px rgba(129, 140, 248, 0.45);
       }
 
+      .synth-card.collapsed {
+        gap: 0;
+      }
+
+      .synth-body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        overflow: hidden;
+        max-height: 9999px;
+        opacity: 1;
+        visibility: visible;
+        transition: max-height 160ms ease, opacity 140ms ease, visibility 0s linear 0s;
+      }
+
+      .synth-card.collapsed .synth-body {
+        max-height: 0;
+        opacity: 0;
+        pointer-events: none;
+        visibility: hidden;
+        transition: max-height 160ms ease, opacity 140ms ease, visibility 0s linear 160ms;
+      }
+
       .instrument-controls {
         display: flex;
         align-items: center;
@@ -659,11 +682,58 @@
         text-transform: uppercase;
       }
 
-      .synth-meta span {
+      .synth-type {
         font-size: 0.8rem;
         letter-spacing: 0.12em;
         text-transform: uppercase;
         color: rgba(148, 163, 184, 0.8);
+      }
+
+      .collapse-toggle {
+        appearance: none;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(148, 163, 184, 0.15);
+        color: rgba(226, 232, 240, 0.88);
+        border-radius: 999px;
+        padding: 6px 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 120ms ease, border 120ms ease, transform 120ms ease;
+      }
+
+      .collapse-toggle:hover {
+        background: rgba(148, 163, 184, 0.25);
+        border-color: rgba(148, 163, 184, 0.45);
+      }
+
+      .collapse-toggle:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.45);
+      }
+
+      .collapse-toggle-icon {
+        width: 0;
+        height: 0;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-top: 8px solid currentColor;
+        transition: transform 160ms ease;
+      }
+
+      .synth-card.collapsed .collapse-toggle-icon {
+        transform: rotate(-90deg);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .synth-body {
+          transition: none;
+        }
+
+        .collapse-toggle-icon {
+          transition: none;
+        }
       }
 
       .rename-instrument,
@@ -1428,15 +1498,20 @@
         <header class="synth-header">
           <div class="synth-meta">
             <div class="synth-name-group">
+              <button class="collapse-toggle" type="button" aria-expanded="true" aria-controls="" aria-label="Toggle instrument visibility">
+                <span class="collapse-toggle-icon" aria-hidden="true"></span>
+              </button>
               <h3 class="instrument-name">Instrument</h3>
               <button class="rename-instrument" type="button" aria-label="Rename instrument">Rename</button>
             </div>
-            <span>Type</span>
+            <span class="synth-type">Type</span>
           </div>
           <button class="subtle remove-instrument" type="button">Remove</button>
         </header>
-        <section class="synth-params"></section>
-        <section class="step-grid"></section>
+        <div class="synth-body">
+          <section class="synth-params"></section>
+          <section class="step-grid"></section>
+        </div>
       </article>
     </template>
 
