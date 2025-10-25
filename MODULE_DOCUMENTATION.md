@@ -1,7 +1,7 @@
 # SeqRoom Module Documentation
 
 **Version**: 1.0.0
-**Total Modules**: 19
+**Total Modules**: 20
 **Total Lines of Code**: 3,452
 **Architecture**: ES6 Modular
 
@@ -31,6 +31,7 @@ SeqRoom is a collaborative real-time music sequencer built with vanilla JavaScri
 ### Key Features
 - Real-time collaborative sequencing via WebSocket
 - Multiple instrument types (TB-303, TR-808, Poly Synth, Sampler)
+- Custom instrument naming with session persistence
 - Audio recording with WAV export
 - Clock synchronization for distributed playback
 - Sample-accurate timing with Web Audio API
@@ -249,7 +250,7 @@ INSTRUMENT_LIBRARY[SynthTypes.TB303] = {
 
 ### 4. State Management Layer
 
-#### `src/state/main.js` (248 lines)
+#### `src/state/main.js` (301 lines)
 
 **Purpose**: Centralized application state and state mutation functions
 
@@ -264,27 +265,33 @@ state = {
   instruments: Map<id, instrument>,
   instrumentOrder: string[],
   activeInstrumentId: string | null,
-  tempoPreview: number
+  tempoPreview: number,
+  ui: {
+    sidebarOpen: boolean
+  }
 }
 ```
 
-**State Mutations** (8 functions):
+**State Mutations** (10 functions):
 - `setRoomId(roomId)` - Set current room
 - `setTransportPlaying(playing)` - Set play/stop state
 - `setTempo(bpm)` - Set tempo
 - `addInstrument(instrument)` - Add instrument to state
 - `removeInstrument(instrumentId)` - Remove instrument
 - `setActiveInstrument(instrumentId)` - Set active instrument
+- `setSidebarOpen(isOpen)` - Update overlay sidebar visibility
 - `updateInstrumentParams(instrumentId, params)` - Update instrument parameters
+- `updateInstrumentName(instrumentId, name)` - Update instrument display name
 
 **State Hydration**:
 - `hydrateState(payload)` - Load complete state from server
 
-**Normalization Functions** (4 functions):
+**Normalization Functions** (5 functions):
 - `normalizeInstrument(instrument)` - Validate and normalize instrument data
 - `normalizeSamplerParams(params)` - Normalize sampler slot parameters
 - `normalizeSamplerSample(sample)` - Validate sample data
 - `normalizeSamplerStep(step)` - Normalize sampler step
+- `sanitizeInstrumentName(rawName, type)` - Clamp and normalize instrument names
 
 **Helper Functions**:
 - `ensureLocalInstrumentCapacity(instrument, stepCount)` - Ensure steps array has capacity
@@ -430,9 +437,10 @@ socketState = {
 - `updatePlaybackIndicators(stepIndex)` - Highlight current step across all instruments
 
 **Instrument Interaction**:
-- `setActiveInstrument(instrumentId)` - Set active instrument
+- `setActiveInstrument(instrumentId, options)` - Set active instrument (optional `{ scrollIntoView, focus }`)
 - `updateActiveInstrumentHighlight()` - Update visual highlighting
 - `requestInstrumentStepCountChange(instrumentId, nextStepCount, options)` - Change step count (optional `{ skipFullRender }` to avoid full card redraw)
+  - Includes inline rename support via contextual input (syncs to server)
 
 **Parameter Controls**:
 - `renderParamControls(container, instrument, definition)` - Render parameter sliders/selects
@@ -471,8 +479,36 @@ socketState = {
 - Uses event delegation for step buttons
 - Drag & drop support for sample loading
 - Base64 encoding for sample transfer
+- Inline instrument renaming with optimistic UI update and server acknowledgment
 
 **Verification**: ✅ Complex but well-structured, handles all instrument types correctly
+
+---
+
+#### `src/ui/sidebar.js` (291 lines)
+
+**Purpose**: Overlay instrument navigator with backdrop dimming and activation shortcuts
+
+**Exports**:
+- `initializeSidebar()` - Wire toggle control, apply overlay defaults, and sync accessibility attributes
+- `renderInstrumentSidebar()` - Render sidebar list using `state.instrumentOrder`
+- `updateSidebarEntry(instrumentId)` - Refresh name and type for a specific instrument
+- `removeInstrumentSidebarEntry(instrumentId)` - Remove sidebar entry for deleted instruments
+- `updateSidebarSelection()` - Sync active instrument highlight with sidebar items
+- `openSidebar()` / `closeSidebar()` - Explicit controls for other modules if needed
+
+**Responsibilities**:
+- Manages overlay/backdrop state with global `state.ui.sidebarOpen`, body classes, and ARIA sync
+- Provides instrument count, name, and type list with empty state messaging
+- Handles sidebar clicks to activate instruments without circular imports (dynamic import)
+- Closes on outside clicks, Escape, or synth selection to keep modal behavior consistent
+
+**Dependencies**:
+- `state/main.js`
+- `constants/instruments.js`
+- Dynamic import: `ui/instrument-card.js` (activation handler)
+
+**Verification**: ✅ Sidebar stays synchronized with instrument mutations/selection and remains responsive with toggle controls
 
 ---
 
@@ -941,6 +977,10 @@ Map<key, {
   - Removes from state
   - Removes card from UI
   - Updates active instrument
+- `instrument:rename` - Instrument name updated
+  - Sanitizes and clamps name (48 chars)
+  - Broadcasts updated instrument to room
+  - Acknowledges requester with sanitized name
 - `instrument:order` - Instrument order changed
   - Updates order array
   - Re-renders all instruments

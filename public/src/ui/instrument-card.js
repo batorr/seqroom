@@ -1,7 +1,7 @@
 // Instrument Card Module
 // Handles rendering and management of instrument cards
 
-import { state, setInstrumentStepCountLocal, ensureLocalInstrumentCapacity, normalizeSamplerStep } from '../state/main.js';
+import { state, setInstrumentStepCountLocal, ensureLocalInstrumentCapacity, normalizeSamplerStep, updateInstrumentName, sanitizeInstrumentName } from '../state/main.js';
 import { audioState, socketState } from '../state/audio.js';
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
@@ -21,6 +21,7 @@ import {
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
 import { instrumentTemplate, instrumentListEl, instrumentEmptyEl } from './main.js';
+import { updateSidebarEntry, removeInstrumentSidebarEntry, updateSidebarSelection } from './sidebar.js';
 
 const PITCH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const PITCH_OCTAVE_MIN = 0;
@@ -457,28 +458,59 @@ export function renderInstrument(instrumentId) {
     updateInstrumentCard(card, instrument);
     renderEmptyState();
     updateActiveInstrumentHighlight();
+    updateSidebarEntry(instrument.id);
 
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
     });
 }
 
-export function setActiveInstrument(instrumentId) {
+export function setActiveInstrument(instrumentId, options = {}) {
+    const { scrollIntoView = false, focus = false } = options;
     if (instrumentId && !state.instruments.has(instrumentId)) {
         instrumentId = null;
     }
-    if (state.activeInstrumentId === instrumentId) {
-        updateActiveInstrumentHighlight();
-        return;
-    }
     state.activeInstrumentId = instrumentId;
     updateActiveInstrumentHighlight();
+    if (instrumentId) {
+        focusInstrumentCard(instrumentId, { scrollIntoView, focus });
+    }
 }
 
 export function updateActiveInstrumentHighlight() {
     socketState.instrumentElements.forEach(({ root }, instrumentId) => {
         root.classList.toggle('active', instrumentId === state.activeInstrumentId);
     });
+    updateSidebarSelection();
+}
+
+function focusInstrumentCard(instrumentId, { scrollIntoView, focus }) {
+    const entry = socketState.instrumentElements.get(instrumentId);
+    if (!entry?.root) {
+        return;
+    }
+
+    const schedule = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (callback) => callback();
+
+    if (scrollIntoView && typeof entry.root.scrollIntoView === 'function') {
+        schedule(() => {
+            entry.root.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+            });
+        });
+    }
+
+    if (focus) {
+        if (!entry.root.hasAttribute('tabindex')) {
+            entry.root.tabIndex = -1;
+        }
+        schedule(() => {
+            entry.root.focus({ preventScroll: true });
+        });
+    }
 }
 
 function updateStepControlDisplay(entry, stepCount) {
@@ -520,6 +552,105 @@ function refreshInstrumentStepUI(instrumentId) {
     }
     renderStepGrid(entry.stepGrid, instrument);
     refreshPlaybackIndicatorsView();
+}
+
+function getInstrumentFallbackName(instrument) {
+    const definition = INSTRUMENT_LIBRARY[instrument.type] || {};
+    return instrument.name || definition.label || 'Instrument';
+}
+
+function beginInstrumentRename(instrumentId) {
+    const instrument = state.instruments.get(instrumentId);
+    if (!instrument) {
+        return;
+    }
+    const entry = socketState.instrumentElements.get(instrumentId);
+    if (!entry || !entry.nameEl) {
+        return;
+    }
+    if (entry.renameInput) {
+        entry.renameInput.focus();
+        entry.renameInput.select();
+        return;
+    }
+
+    const currentName = getInstrumentFallbackName(instrument);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'instrument-name-input';
+    input.value = currentName;
+    input.maxLength = 48;
+
+    const nameEl = entry.nameEl;
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    entry.renameInput = input;
+    input.focus();
+    input.select();
+
+    const finish = (commit) => {
+        if (entry.renameInput !== input) {
+            return;
+        }
+        input.removeEventListener('keydown', handleKeyDown);
+        input.removeEventListener('blur', handleBlur);
+        entry.renameInput = null;
+        input.remove();
+        if (!commit) {
+            nameEl.textContent = currentName;
+        }
+    };
+
+    const commitRename = () => {
+        if (entry.renameInput !== input) {
+            return;
+        }
+        const nextName = sanitizeInstrumentName(input.value, instrument.type);
+        finish(true);
+        const previousName = instrument.name;
+        if (nextName === previousName) {
+            nameEl.textContent = nextName;
+            return;
+        }
+        updateInstrumentName(instrumentId, nextName);
+        nameEl.textContent = nextName;
+        const suppressionExpiry = Date.now() + 400;
+        socketState.suppressedInstrumentUpdates.set(instrumentId, suppressionExpiry);
+        setTimeout(() => {
+            if (socketState.suppressedInstrumentUpdates.get(instrumentId) === suppressionExpiry) {
+                socketState.suppressedInstrumentUpdates.delete(instrumentId);
+            }
+        }, 600);
+        renderInstrument(instrumentId);
+        if (socket) {
+            socket.emit('instrument:rename', { instrumentId, name: nextName }, (response = {}) => {
+                if (!response.ok) {
+                    const fallback = previousName || getInstrumentFallbackName(instrument);
+                    socketState.suppressedInstrumentUpdates.delete(instrumentId);
+                    updateInstrumentName(instrumentId, fallback);
+                    renderInstrument(instrumentId);
+                    if (response.error) {
+                        console.error('Failed to rename instrument:', response.error);
+                        window.alert('Unable to rename instrument. Please try again.');
+                    }
+                }
+            });
+        }
+    };
+
+    const handleBlur = () => commitRename();
+    const handleKeyDown = (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            commitRename();
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            finish(false);
+        }
+    };
+
+    input.addEventListener('keydown', handleKeyDown);
+    input.addEventListener('blur', handleBlur);
 }
 
 export function requestInstrumentStepCountChange(instrumentId, nextStepCount, options = {}) {
@@ -602,12 +733,16 @@ export function requestInstrumentStepCountChange(instrumentId, nextStepCount, op
 export function ensureInstrumentCard(instrument) {
     let wrapper = socketState.instrumentElements.get(instrument.id)?.root;
     if (wrapper) {
+        if (!wrapper.hasAttribute('tabindex')) {
+            wrapper.tabIndex = -1;
+        }
         updateInstrumentCard(wrapper, instrument);
         return wrapper;
     }
 
     const node = instrumentTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.instrumentId = instrument.id;
+    node.tabIndex = -1;
 
     const removeBtn = node.querySelector('.remove-instrument');
     removeBtn.addEventListener('click', () => {
@@ -634,7 +769,23 @@ export function ensureInstrumentCard(instrument) {
         activeDrum: 'kick',
         activeSamplerSlot: SAMPLER_SLOT_IDS[0],
         stepControl: null,
+        nameEl: node.querySelector('.instrument-name'),
+        renameButton: node.querySelector('.rename-instrument'),
+        renameInput: null,
     };
+
+    if (cardEntry.renameButton) {
+        cardEntry.renameButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            beginInstrumentRename(instrument.id);
+        });
+    }
+    if (cardEntry.nameEl) {
+        cardEntry.nameEl.addEventListener('dblclick', (event) => {
+            event.stopPropagation();
+            beginInstrumentRename(instrument.id);
+        });
+    }
 
     // Create step controls
     const controlsRow = document.createElement('div');
@@ -822,9 +973,17 @@ export function updateInstrumentCard(card, instrument) {
         card.classList.add(definition.toneClass);
     }
 
-    const titleEl = card.querySelector('.synth-meta h3');
+    if (entry) {
+        entry.nameEl = card.querySelector('.instrument-name');
+    }
+    const titleEl = entry?.nameEl || card.querySelector('.instrument-name');
     const typeEl = card.querySelector('.synth-meta span');
-    titleEl.textContent = instrument.name || definition.label;
+    const displayName = instrument.name || definition.label;
+    if (entry && entry.renameInput) {
+        entry.renameInput.value = displayName;
+    } else if (titleEl) {
+        titleEl.textContent = displayName;
+    }
     typeEl.textContent = definition.typeLabel || instrument.type;
 
     const paramsContainer = entry.paramsContainer;
@@ -878,8 +1037,13 @@ export function removeInstrumentCard(instrumentId) {
     if (!entry) {
         return;
     }
+    if (entry.renameInput) {
+        entry.renameInput.remove();
+        entry.renameInput = null;
+    }
     entry.root.remove();
     socketState.instrumentElements.delete(instrumentId);
+    removeInstrumentSidebarEntry(instrumentId);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
     });
@@ -1479,6 +1643,8 @@ export function renderParamControls(container, instrument, definition) {
                 } else {
                     instrument.params[paramDef.key] = numericValue;
                 }
+
+                updateSidebarEntry(instrument.id);
 
                 const paramsPayload = createInstrumentParamUpdate(instrument, paramDef, numericValue);
                 if (!paramsPayload) {

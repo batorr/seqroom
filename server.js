@@ -25,6 +25,7 @@ const SynthTypes = Object.freeze({
 
 const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
+const INSTRUMENT_NAME_MAX_LENGTH = 48;
 
 const TR808_PARAM_SCHEMA = {
   master: {
@@ -119,6 +120,18 @@ function defaultInstrumentName(type) {
     default:
       return 'Instrument';
   }
+}
+
+function sanitizeInstrumentName(name, type) {
+  const fallback = defaultInstrumentName(type);
+  if (typeof name !== 'string') {
+    return fallback;
+  }
+  const trimmed = name.trim();
+  if (!trimmed.length) {
+    return fallback;
+  }
+  return trimmed.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
 }
 
 function createDefaultParams(type) {
@@ -248,7 +261,7 @@ function createInstrument(type, options = {}) {
   const instrument = {
     id: randomUUID(),
     type,
-    name: options.name || defaultInstrumentName(type),
+    name: sanitizeInstrumentName(options.name, type),
     createdAt: Date.now(),
     params: createDefaultParams(type),
     stepCount: initialStepCount,
@@ -330,6 +343,8 @@ function cloneInstrument(instrument) {
   ) {
     instrument.params.waveform = normalizeWaveform(instrument.params.waveform);
   }
+
+  instrument.name = sanitizeInstrumentName(instrument.name, instrument.type);
 
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
   instrument.stepCount = normalizedStepCount;
@@ -1149,6 +1164,36 @@ io.on('connection', (socket) => {
 
     applyInstrumentParams(instrument, params);
     broadcastInstrumentState(room.id, instrumentId);
+  });
+
+  socket.on('instrument:rename', ({ instrumentId, name } = {}, callback) => {
+    const respond = typeof callback === 'function' ? callback : () => {};
+    const room = getRoomForSocket(socket);
+    if (!room) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    if (typeof instrumentId !== 'string') {
+      respond({ ok: false, error: 'invalid-instrument' });
+      return;
+    }
+
+    const instrument = room.instruments.get(instrumentId);
+    if (!instrument) {
+      respond({ ok: false, error: 'instrument-not-found' });
+      return;
+    }
+
+    const sanitizedName = sanitizeInstrumentName(name, instrument.type);
+    if (instrument.name === sanitizedName) {
+      respond({ ok: true, name: sanitizedName });
+      return;
+    }
+
+    instrument.name = sanitizedName;
+    broadcastInstrumentState(room.id, instrumentId);
+    respond({ ok: true, name: sanitizedName });
   });
 
   socket.on('instrument:step', ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {

@@ -3,7 +3,7 @@
 
 import { DEFAULT_BPM } from '../constants/audio.js';
 import { STEP_COUNT } from '../constants/ui.js';
-import { SynthTypes, TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
+import { SynthTypes, TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
     clampTempo,
@@ -28,6 +28,9 @@ export const state = {
     instrumentOrder: [],
     activeInstrumentId: null,
     tempoPreview: DEFAULT_BPM,
+    ui: {
+        sidebarOpen: false,
+    },
 };
 
 function normalizeWaveform(value) {
@@ -43,6 +46,21 @@ function normalizeSynthParams(params = {}) {
         normalized.waveform = normalizeWaveform(normalized.waveform);
     }
     return normalized;
+}
+
+const INSTRUMENT_NAME_MAX_LENGTH = 48;
+
+export function sanitizeInstrumentName(rawName, type) {
+    const definition = INSTRUMENT_LIBRARY[type] || {};
+    const fallback = definition.label || 'Instrument';
+    if (typeof rawName !== 'string') {
+        return fallback;
+    }
+    const trimmed = rawName.trim();
+    if (!trimmed.length) {
+        return fallback;
+    }
+    return trimmed.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
 }
 
 // State mutation functions
@@ -82,6 +100,10 @@ export function setActiveInstrument(instrumentId) {
     state.activeInstrumentId = instrumentId;
 }
 
+export function setSidebarOpen(isOpen) {
+    state.ui.sidebarOpen = Boolean(isOpen);
+}
+
 export function updateInstrumentParams(instrumentId, params) {
     const instrument = state.instruments.get(instrumentId);
     if (instrument) {
@@ -91,6 +113,14 @@ export function updateInstrumentParams(instrumentId, params) {
         }
         instrument.params = merged;
     }
+}
+
+export function updateInstrumentName(instrumentId, name) {
+    const instrument = state.instruments.get(instrumentId);
+    if (!instrument) {
+        return;
+    }
+    instrument.name = sanitizeInstrumentName(name, instrument.type);
 }
 
 // Hydrate state from server payload
@@ -121,6 +151,8 @@ export function hydrateState(payload) {
     state.activeInstrumentId = nextActiveInstrumentId && state.instruments.has(nextActiveInstrumentId)
         ? nextActiveInstrumentId
         : null;
+
+    state.ui.sidebarOpen = false;
 }
 
 // Normalize instrument data
@@ -160,10 +192,12 @@ export function normalizeInstrument(instrument) {
         ? normalizeSamplerParams(instrument.params)
         : normalizeSynthParams(instrument.params);
 
+    const normalizedName = sanitizeInstrumentName(instrument.name, instrument.type);
+
     return {
         id: instrument.id,
         type: instrument.type,
-        name: instrument.name,
+        name: normalizedName,
         createdAt: instrument.createdAt,
         params: normalizedParams,
         stepCount: normalizedStepCount,

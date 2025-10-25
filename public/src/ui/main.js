@@ -3,6 +3,7 @@
 
 import { state } from '../state/main.js';
 import { socketState } from '../state/audio.js';
+import { initializeSidebar, renderInstrumentSidebar } from './sidebar.js';
 
 // DOM Element References
 export const landingEl = document.getElementById('landing');
@@ -26,6 +27,9 @@ export const addSynthModal = document.getElementById('add-synth-modal');
 export const closeSynthModalBtn = document.getElementById('close-synth-modal');
 export const instrumentTemplate = document.getElementById('instrument-card-template');
 export const recordingStatusEl = document.getElementById('recording-status');
+
+initializeSidebar();
+renderInstrumentSidebar();
 
 // View management
 export function showSequencer() {
@@ -117,6 +121,7 @@ export function renderInstruments() {
         instrumentListEl.innerHTML = '';
         instrumentListEl.appendChild(fragment);
         renderEmptyState();
+        renderInstrumentSidebar();
         updateActiveInstrumentHighlight();
 
         import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
