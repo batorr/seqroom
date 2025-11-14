@@ -1,36 +1,50 @@
 # Seqroom
 
-Seqroom is a lightweight collaborative 16-step sequencer prototype. Each browser keeps its own audio engine, while the server only relays control events via Socket.IO.
+Seqroom is a browser-based, collaborative 16-step sequencer. A Node/Express server serves static assets, relays control data with Socket.IO, and sends periodic clock-sync samples. Each browser builds its own instrument list, runs a Web Audio scheduler, and can record the summed mix to WAV through an AudioWorklet.
 
-## Getting Started
+## Requirements
+- Node.js 18+ and npm 8+
+- Modern Chromium, Firefox, or Edge browser with Web Audio + AudioWorklet support
+- Local network connectivity if you want multiple devices in the same room
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Run the development server:
-   ```bash
-   npm start
-   ```
-3. Open a browser at the printed URLs (e.g. `http://localhost:3000` or the local LAN address such as `http://192.168.x.x:3000`). The server logs every available IPv4 so phones on the same Wi-Fi can join quickly.
-4. Use the landing page to create a new room or join an existing room code. Once you are in a room, the shared sequencer appears and begins playing in sync.
+## Install and Run
+```bash
+npm install
+npm start
+```
+The server prints both `http://localhost:3000` and any discoverable LAN addresses. Open the URL in a browser; other devices on the same network can use the LAN address.
+
+## Features
+- Real-time collaboration through Socket.IO rooms
+- TB-303, TR-808, Poly Synth, and Sampler instruments (sampler exposes six slots with per-slot gain/pan/pitch/start/end/reverse controls)
+- Step counts per instrument from 1 to 128 (default 16) and per-step drum/sampler layers
+- Tempo range 30–300 BPM with numeric input and slider, plus transport controls shared by every client
+- Sidebar overview, synth modal, and locking state to keep collaborators coordinated
+- Local recording pipeline using `public/recording-processor.js`, downloading 32-bit float WAV files
 
 ## Room Flow
+1. Launch the server and open the UI.
+2. Click **Create Room** to generate a six-character code and enter a fresh session. The code is displayed beneath the landing buttons.
+3. Share the code with collaborators. They click **Join Room**, enter the code, and immediately receive the room state (tempo, transport phase, instruments, sampler slots).
+4. Use **Leave Room** to return to the landing page. You can rejoin with the same code as long as the server is still running.
 
-- **Create Room** generates a short shareable code (e.g. `7GH42P`), shows it on the landing card, and connects you to a fresh sequencer session.
-- **Join Room** prompts for an existing code and connects your browser to that session. The pattern, tempo, and transport phase load instantly, and audio starts playing as soon as the clock locks.
-- The status bar displays the active room, clock offset/latency, and how many collaborators are connected. Use the Leave button to return to the lobby; you can rejoin later with the same code.
+## Working With The Sequencer
+- **Adding instruments**: Select TB-303, TR-808, Poly Synth, or Sampler from the synth modal. Instrument cards appear in the order they were created; drag ordering is handled server-side when card reorder buttons are used.
+- **Editing steps**: Melodic instruments expose per-step note buttons and pitch pickers, TR-808 shows four drum layers per column, and the sampler shows six slot toggles. Every edit emits a Socket.IO event so the server can broadcast the normalized pattern.
+- **Parameters**: Each card exposes sliders (volume, filter, envelopes, drum levels) plus sampler slot editors for gain/pan/pitch/start/end/reverse. Changes sync immediately after the server validates them.
+- **Tempo & transport**: Use the slider or numeric input to set BPM (30–300). Play/Stop toggles transport for everyone in the room. The sync banner displays clock offset and round-trip time after the ping/pong handshake stabilizes.
+- **Sampler uploads**: Drag audio files (<= 5 MB, WAV/MP3) onto a sampler slot. The client base64-encodes the file, the server validates and rebroadcasts it, and every client decodes the buffer for playback.
+- **Recording**: Click **REC** to instantiate the AudioWorklet and capture the mixed output. Recording stats show elapsed time and bytes recorded. Clicking the button again stops capture and downloads `seqroom_recording.wav`.
 
 ## Sync Testing
-
-- Start the server with `npm start`, then open Seqroom in a desktop browser.
-- Join from a second device (for example, a phone on the same Wi-Fi) using one of the LAN URLs printed in the terminal.
-- Watch the sync banner in the UI; once it shows a small offset and RTT, both browsers are locked to the same musical phase.
-- Toggle steps on either device—the shared pattern updates instantly while the metronomes stay phase-aligned thanks to the continuous clock correction.
+1. Run `npm start`.
+2. Open the local URL in a desktop browser and create a room.
+3. Open the LAN URL on a second device (phone, tablet, or another computer) and join the same room code.
+4. Wait for the sync banner to show a finite offset and RTT (typically under 20 ms on a LAN), then toggle steps or change tempo on either device. Both browsers should stay phase-aligned because each schedules locally using the server clock.
 
 ## Notes
-
-- Audio requires a user gesture in some browsers; tap or click once to unlock audio playback.
-- Tempo changes are limited to 60–180 BPM to keep things musical.
-- This is a prototype meant for LAN testing; add authentication or persistence before putting it on the public internet.
-- The Web Audio transport follows a smoothed NTP-style sync: the server pings every two seconds, clients measure round-trip latency, and offsets are eased in to avoid audible jumps.
+- Browsers require a user gesture before audio can start; click once anywhere in the document when prompted to unlock audio playback.
+- The server never generates sound; every participant’s browser is responsible for synthesis, which means CPU usage scales with the number of instruments per client.
+- Use these scripts on trusted networks only. There is no authentication, rate limiting, or persistence.
+- Recording requires AudioWorklet support. If the button is disabled, the browser does not expose `AudioWorkletNode`.
+- See `SETUP_AND_RUN.md` for in-depth setup, troubleshooting, and architecture notes, and `MODULE_DOCUMENTATION.md` for module-level details.

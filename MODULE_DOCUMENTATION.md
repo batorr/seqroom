@@ -1,1266 +1,168 @@
 # SeqRoom Module Documentation
 
-**Version**: 1.0.0
-**Total Modules**: 20
-**Total Lines of Code**: 3,452
-**Architecture**: ES6 Modular
-
----
-
-## 📋 Table of Contents
-
-1. [Overview](#overview)
-2. [Module Dependency Graph](#module-dependency-graph)
-3. [Module Documentation](#module-documentation)
-   - [Entry Point](#1-entry-point)
-   - [Constants](#2-constants-layer)
-   - [Utilities](#3-utilities-layer)
-   - [State Management](#4-state-management-layer)
-   - [UI Layer](#5-ui-layer)
-   - [Audio Engine](#6-audio-engine-layer)
-   - [Network Layer](#7-network-layer)
-4. [Data Flow](#data-flow)
-5. [Verification Status](#verification-status)
-
----
-
 ## Overview
+SeqRoom is a collaborative step sequencer built with a lightweight Node/Express server and a modular browser client. The server maintains room membership, instrument state, and transport timing, relays Socket.IO events, and issues periodic clock-sync samples. Each client runs its own Web Audio engine, schedules notes locally, and can capture audio through an AudioWorklet. The client code lives under `public/src` and is grouped into constants, utilities, shared state, UI, audio, and socket layers.
 
-SeqRoom is a collaborative real-time music sequencer built with vanilla JavaScript and ES6 modules. The application enables multiple users to create music together in synchronized rooms using various synthesizers, drum machines, and samplers.
-
-### Key Features
-- Real-time collaborative sequencing via WebSocket
-- Multiple instrument types (TB-303, TR-808, Poly Synth, Sampler)
-- Custom instrument naming with session persistence
-- Audio recording with WAV export
-- Clock synchronization for distributed playback
-- Sample-accurate timing with Web Audio API
-
----
-
-## Module Dependency Graph
-
+## Current Layout
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         app.js                               │
-│                    (Entry Point)                             │
-└────────────┬────────────────────────────────────────────────┘
-             │
-    ┌────────┴────────┬──────────┬──────────┐
-    ▼                 ▼          ▼          ▼
-┌─────────┐    ┌──────────┐ ┌────────┐ ┌────────┐
-│  state  │◄───│    ui    │ │ audio  │ │ socket │
-└────┬────┘    └─────┬────┘ └───┬────┘ └───┬────┘
-     │               │          │           │
-     │          ┌────┴──────┐   │           │
-     ▼          ▼           ▼   ▼           │
-┌──────────┐ ┌──────────┐ ┌─────────────┐  │
-│constants │ │  utils   │ │ instruments │  │
-└──────────┘ └──────────┘ └─────────────┘  │
-     ▲          ▲              ▲            │
-     └──────────┴──────────────┴────────────┘
+.
+├── package.json
+├── package-lock.json
+├── server.js
+├── public/
+│   ├── index.html
+│   ├── recording-processor.js
+│   └── src/
+│       ├── app.js
+│       ├── audio/
+│       │   ├── main.js
+│       │   ├── recording.js
+│       │   ├── scheduler.js
+│       │   └── instruments/
+│       │       ├── poly-synth.js
+│       │       ├── sampler.js
+│       │       ├── tb303.js
+│       │       └── tr808.js
+│       ├── constants/
+│       │   ├── audio.js
+│       │   ├── instruments.js
+│       │   └── ui.js
+│       ├── socket/
+│       │   └── main.js
+│       ├── state/
+│       │   ├── audio.js
+│       │   └── main.js
+│       ├── ui/
+│       │   ├── instrument-card.js
+│       │   ├── main.js
+│       │   ├── sidebar.js
+│       │   └── tempo-controls.js
+│       └── utils/
+│           ├── audio.js
+│           └── helpers.js
+├── MODULE_DOCUMENTATION.md
+├── README.md
+└── SETUP_AND_RUN.md
 ```
+(`node_modules/` omitted)
 
----
+## Architecture Summary
+- `server.js` runs Express and Socket.IO, serves `public/`, keeps per-room transport/instrument state, clamps tempo and step counts, validates sampler uploads (5 MB cap, whitelisted mime types), and emits events such as `state:init`, `transport:update`, `instrument:*`, `tempo:update`, `connections:update`, and `time:ping/time:sync`.
+- `public/index.html` defines the landing view, sequencer layout, sidebar overlay, synth modal, and all DOM ids that the UI layer queries. It loads `/socket.io/socket.io.js` followed by `src/app.js` as the ES module entry point.
+- `public/src/app.js` composes tempo, transport, room, recording, and synth-modal controls, triggers the audio unlock, registers socket listeners, and synchronizes the initial UI by calling `initialize()` as soon as the module loads.
+- `public/src/state/main.js` is the single source of truth for transport data, instrument definitions, ordering, and UI flags. All UI, audio, and socket modules mutate state through its exported helpers so that derived values (e.g., sampler slots, drum layers) stay normalized.
+- `public/src/state/audio.js` tracks the Web Audio context, master gain, scheduler counters, recording metadata, sampler buffers, and socket-level timing info (pending pings, clock offsets, room-request state). Audio and socket modules read and mutate this structure directly.
+- Constants under `public/src/constants/` capture every limit (tempo range, step counts, room-id pattern, sampler slot metadata) and are imported across the codebase to avoid magic numbers.
+- Utilities under `public/src/utils/` centralize clamping, formatting, sampler slot creation, note-to-frequency conversion, noise buffer creation, base64 conversion, and WAV encoding.
+- The UI layer (`ui/main.js`, `ui/instrument-card.js`, `ui/sidebar.js`, `ui/tempo-controls.js`) renders DOM, binds user interactions, coordinates with the socket layer, and keeps `state` plus `socketState.instrumentElements` in sync.
+- The audio layer (`audio/main.js`, `audio/scheduler.js`, `audio/recording.js`, and `audio/instruments/*`) creates and schedules Web Audio nodes, caches decoded samples, calculates playback positions from the server clock, and streams recording data back to the UI.
+- `public/src/socket/main.js` owns the Socket.IO client, room connect/disconnect flows, tempo/transport commands, instrument locking and editing events, sampler preparation hooks, and the wiring between socket payloads, shared state, and UI renders.
+- `public/recording-processor.js` implements the `seqroom-recorder` AudioWorklet that `audio/recording.js` instantiates so that recording runs off the main thread.
 
-## Module Documentation
+## Module Reference
 
-### 1. Entry Point
+### Entry, Platform, and Server
+#### `server.js`
+Express + Socket.IO server. Serves static assets, manages rooms, and keeps authoritative transport/instrument state per room. Validates room codes, clamps BPM (30–300) and step counts (1–128), creates normalized instruments (`TB-303`, `TR-808`, `poly-synth`, `sampler`), deep-clones TR-808 and sampler parameters, and enforces sampler upload limits. Handles events such as `room:create`, `room:join`, `room:leave`, `transport:play`, `transport:stop`, `transport:set-tempo`, `tempo:set` (legacy), `instrument:add`, `instrument:remove`, `instrument:set-length`, `instrument:param`, `instrument:rename`, `instrument:step`, `lockSynth`, `unlockSynth`, and `time:pong`. Broadcasts `state:init`, `transport:update`, `tempo:update`, `instrument:added`, `instrument:update`, `instrument:removed`, `instrument:order`, `synthLocked`, `synthUnlocked`, `lockFailed`, `connections:update`, and `time:ping/time:sync`. Calculates `sessionStartTime`/`lastScheduledStart` so clients can align playback.
 
-#### `src/app.js` (48 lines)
+#### `public/index.html`
+Static HTML shell containing the landing screen, sequencer, sidebar overlay, synth modal, sidebar toggle, tempo controls, instrument list, empty state, and recording status label. Provides every element id used by `ui/main.js`, `ui/instrument-card.js`, and `ui/sidebar.js`. Loads the Socket.IO client bundle and then `src/app.js` with `type="module"`.
 
-**Purpose**: Application initialization and orchestration
+#### `public/src/app.js`
+Entry module that imports shared state, UI helpers, tempo controls, and the socket integration. `initialize()` wires tempo controls to the socket, binds transport, recording, and room buttons, opens the synth modal, primes the audio context unlock, registers socket event handlers, shows the landing view, and updates the on-screen tempo. The module invokes `initialize()` immediately so the UI is ready as soon as the script loads.
 
-**Exports**:
-- `initialize()` - Main initialization function (auto-invoked on load)
+#### `public/recording-processor.js`
+AudioWorklet processor registered as `seqroom-recorder`. Receives Float32 audio input from the connected node, interleaves multi-channel data into a transferable `ArrayBuffer`, posts each chunk back to the main thread with channel-count metadata, and sends an initial `ready` message with the worklet sample rate.
 
-**Dependencies**:
-- `state/main.js` - Application state
-- `ui/main.js` - UI elements and setup functions
-- `ui/tempo-controls.js` - Tempo control setup
-- `socket/main.js` - WebSocket communication setup
+### Constants
+#### `public/src/constants/audio.js`
+Defines tempo bounds (30–300 BPM), the default BPM (120), lookahead/schedule windows (`AUDIO_LOOKAHEAD_MS`, `AUDIO_SCHEDULE_AHEAD_SECONDS`), recording stat throttling, and the list of selectable note names. Imported by state normalization, tempo controls, audio scheduling, and recording components.
 
-**Initialization Flow**:
-1. Setup tempo controls with socket reference
-2. Setup transport controls (play/stop/add)
-3. Setup recording controls
-4. Setup room controls (create/join/leave)
-5. Setup synth modal for instrument selection
-6. Prime audio context unlock (user interaction requirement)
-7. Setup socket event listeners
-8. Show landing page
-9. Update tempo display
+#### `public/src/constants/instruments.js`
+Declares `SynthTypes`, TR-808 drum layer metadata, sampler slot descriptors, `SAMPLER_SLOT_IDS`, `SAMPLER_MAX_SAMPLE_BYTES`, `SAMPLER_ALLOWED_MIME_TYPES`, and `INSTRUMENT_LIBRARY` (label, tone class, and parameter sliders/selectors for each synth type). Used by state normalization, sampler helpers, UI rendering (instrument cards, sidebar), and audio scheduling.
 
-**Verification**: ✅ Correct initialization order, no circular dependencies
+#### `public/src/constants/ui.js`
+Stores UI-related limits: default step count (16), min/max steps (1–128), grid column count (16), and the `ROOM_ID_PATTERN`. Consumed by state normalization, helpers, UI rendering, and socket validation helpers.
 
----
+### Utilities
+#### `public/src/utils/helpers.js`
+General helper library. Provides clamping (`clampTempo`, `clampStepCount`, `clampValue`), byte/duration formatting, room-id utilities (`generateRoomId`, `normalizeRoomId`), slider/select param builders, melodic/drum/sampler step factories, sampler slot factory, sampler sample normalization helpers, and `createPitchSelect` for UI dropdown buttons. Used by state management, sampler handling, UI rendering, and socket workflows.
 
-### 2. Constants Layer
+#### `public/src/utils/audio.js`
+Audio-specific helpers: note-to-frequency conversion, white-noise buffer creation, base64 encoding/decoding for sampler uploads, reversed-buffer generation, recording chunk merging, WAV encoding, and DataView string writing. Used by the audio engine, sampler loader, TR-808 noise sources, and recording/export code.
 
-#### `src/constants/audio.js` (26 lines)
+### State Management
+#### `public/src/state/main.js`
+Holds the canonical `state` object (room info, transport, instruments map, ordering, selected instrument, UI flags) plus helpers to mutate it (`setRoomId`, `setTransportPlaying`, `setTempo`, `addInstrument`, `removeInstrument`, `setActiveInstrument`, `setSidebarOpen`, `updateInstrumentParams`, `updateInstrumentName`, `hydrateState`). Normalizes instruments received from the server, including sampler slot sanitization (`normalizeSamplerParams`, `normalizeSamplerSample`, `normalizeSamplerStep`), TR-808 drum layers, and melodic steps. Provides `sanitizeInstrumentName`, `ensureLocalInstrumentCapacity`, `setInstrumentStepCountLocal`, `setInstrumentLockedBy`, and `getStepDurationMs`.
 
-**Purpose**: Audio-related constants and configuration
+#### `public/src/state/audio.js`
+Defines `audioState` (AudioContext, master gain, scheduler counters, recording metadata, sampler buffer caches) and `socketState` (instrument DOM references, pending room requests, ping metadata, clock offset/latency estimates, suppressed update timers). Exposes setters such as `setAudioContext`, `setMasterGain`, `setSchedulerId`, `setNextStepIndex`, `setRecordingState`, `setSamplerBuffer`, `deleteSamplerBuffer`, `clearSamplerBuffers`, and socket-related helpers (`setClockOffset`, `setLatencyEstimate`, `setHasSyncSample`, `clearPendingPings`, `setPendingRoomRequest`).
 
-**Exports**:
-- `TEMPO_MIN` (30) - Minimum BPM
-- `TEMPO_MAX` (300) - Maximum BPM
-- `DEFAULT_BPM` (120) - Default tempo
-- `OFFSET_SMOOTHING` (0.2) - Clock offset smoothing factor
-- `LATENCY_SMOOTHING` (0.25) - Latency estimate smoothing
-- `AUDIO_LOOKAHEAD_MS` (25) - Scheduler lookahead time
-- `AUDIO_SCHEDULE_AHEAD_SECONDS` (0.18) - Audio scheduling window
-- `RECORDING_STATS_UPDATE_INTERVAL_MS` (200) - Recording UI update rate
-- `NOTE_OPTIONS` - Array of musical notes (C1-B5)
+### Audio Engine
+#### `public/src/audio/main.js`
+Ensures a single AudioContext/master gain, resumes suspended contexts, seeds sampler instruments by calling `prepareSamplerAudio`, and exposes clock helpers (`getServerSyncedTime`, `getClientAbsoluteTime`) plus `applyClockCorrection` to smooth clock offset and latency estimates before updating the UI sync display.
 
-**Dependencies**: None
+#### `public/src/audio/scheduler.js`
+Translates transport state into Web Audio scheduling. Provides `getCurrentStepIndex`, `syncAudioScheduler` (aligns `audioState.nextStepIndex` with the current server time, kicks off the scheduling interval, and updates playback indicators), `stopAudioScheduler`, `runAudioScheduler`, `scheduleStep` (iterates instruments, ensures local step capacity, skips inactive steps), and `scheduleInstrumentStep` (dispatches to the instrument-specific scheduler based on `SynthTypes`). Depends on `ensureAudioContext`, `state`, `audioState`, `SynthTypes`, UI playback indicator hooks, and instrument scheduler modules.
 
-**Verification**: ✅ All constants properly defined, no magic numbers elsewhere
+#### `public/src/audio/recording.js`
+Controls recording. `isRecordingSupported` checks AudioWorklet availability, `toggleRecording` switches recording state, `startRecording` ensures the worklet module is loaded, creates the `seqroom-recorder` node, wires event handlers (`handleRecordingMessage`), and tracks stats in `audioState`. `stopRecording` disconnects the node, merges buffered Float32 chunks, encodes a WAV blob, and triggers a download via `downloadBlob`. Includes helpers to clear/reset recording data, update the on-screen status (`recordingStatusEl`), throttle stats updates, toggle the record button state, and format byte/duration labels.
 
----
+#### `public/src/audio/instruments/tb303.js`
+Schedules an acid-style bass voice: configures an oscillator, low-pass filter, and exponential amplitude envelope based on instrument parameters, then routes the result through the shared master gain.
 
-#### `src/constants/instruments.js` (96 lines)
+#### `public/src/audio/instruments/tr808.js`
+Schedules TR-808 layers (kick, snare, hat, clap) according to per-step layer flags. Uses noise buffers plus filter/gain envelopes per drum, clamps parameter ranges, and routes each partial to the master gain.
 
-**Purpose**: Instrument type definitions and configurations
+#### `public/src/audio/instruments/poly-synth.js`
+Schedules a polyphonic subtractive synth voice. Configures an oscillator (sine/triangle/saw/square), ADSR envelope, and resonant low-pass filter per step based on instrument parameters, then connects to the master gain.
 
-**Exports**:
-- `SynthTypes` - Frozen enum of instrument types
-  - `TB303`: 'tb-303'
-  - `TR808`: 'tr-808'
-  - `POLY`: 'poly-synth'
-  - `SAMPLER`: 'sampler'
-- `TR808_DRUMS` - Drum pad configuration (kick, snare, hat, clap)
-- `SAMPLER_SLOT_CONFIG` - 6 sampler slots (A-F) with colors
-- `SAMPLER_SLOT_IDS` - Array of slot IDs
-- `SAMPLER_MAX_SAMPLE_BYTES` (5MB) - Maximum sample size
-- `SAMPLER_ALLOWED_MIME_TYPES` - Allowed audio formats
-- `INSTRUMENT_LIBRARY` - Complete instrument definitions with parameters
+#### `public/src/audio/instruments/sampler.js`
+Handles sampler playback and decoding. Generates cache keys per instrument/slot, schedules slots whose steps are active (applying volume/pan/pitch/start/end/reverse settings), and keeps decoded buffers plus reversed variants in `audioState.samplerBuffers`. Includes `prepareSamplerAudio` (ensures every sampler instrument has decoded buffers), `loadSamplerSlotSample` (decodes base64 payloads, tracks pending loads), and `cleanupSamplerBuffers` (purges caches when instruments are removed).
 
-**Dependencies**:
-- `utils/helpers.js` - `sliderParam`, `selectParam`
+### UI Layer
+#### `public/src/ui/main.js`
+Collects DOM references, initializes the sidebar, and renders the main view. Provides view toggles (`showLanding`, `showSequencer`), modal controls, transport rendering (tempo display, transport buttons, playback indicators), instrument list rendering (via dynamic import of `ui/instrument-card.js`), recorder status updates, connection/sync banners, and utility helpers like `showRoomCodeHint` and `renderEmptyState`. Also exports the DOM elements used by other modules (tempo inputs, buttons, instrument template, etc.).
 
-**Key Feature**: `INSTRUMENT_LIBRARY` is initialized at module load using factory function
+#### `public/src/ui/instrument-card.js`
+Large module that renders individual instrument cards from a template, manages collapsed state via `localStorage`, and stores references in `socketState.instrumentElements`. Handles melodic/drum/sampler step grid interactions, pitch selection popovers, parameter sliders, instrument renaming, locking state, sampler uploads (size/mime validation, drag-and-drop, delete/reset interactions), and recording of local-only mutations before socket acknowledgements. Provides helpers for updating playback indicators, ensuring card existence (`ensureInstrumentCard`), rendering empty states, scrolling into view, and coordinating with the sidebar.
 
-**Structure**:
-```javascript
-INSTRUMENT_LIBRARY[SynthTypes.TB303] = {
-  label: 'Acid Bass',
-  typeLabel: 'TB-303',
-  toneClass: 'tone-acid',
-  params: [/* slider and select parameters */]
-}
-```
+#### `public/src/ui/sidebar.js`
+Manages the overlay sidebar listing all instruments. Controls the open/close state, keyboard interactions, overlay click handling, and DOM updates for each instrument entry. Uses `updateSidebarEntry`, `removeInstrumentSidebarEntry`, `updateSidebarSelection`, and notifies `ui/instrument-card.js` when the user activates an instrument from the sidebar.
 
-**Verification**: ✅ Properly initialized, no circular dependency with helpers
+#### `public/src/ui/tempo-controls.js`
+Owns the BPM slider and numeric input. Exposes `tempoInputState`, `updateTempoDisplay`, `commitTempo`, and `setupTempoControls`. Clamps BPM to the allowed range, updates the shared state, emits `transport:set-tempo` when connected, and triggers `syncAudioScheduler` after each change.
 
----
+### Socket Layer
+#### `public/src/socket/main.js`
+Creates the Socket.IO client, registers all event listeners, and exports control wiring helpers. `setupSocketEvents` hydrates state on `state:init`, updates transport and tempo, handles instrument add/update/remove/order events (normalizing instruments and triggering UI renders), propagates sampler updates, manages lock notifications, applies server-sent step toggles for legacy clients, updates connection counts, and drives clock sync via `time:ping`/`time:sync`. `setupRoomControls`, `setupTransportControls`, and `setupRecordingControls` bind DOM elements to socket commands. `connectToRoom` orchestrates room creation/join, request timeouts, UI resets, and landing/sequencer transitions. `handleRoomError` and `leaveRoom` centralize room teardown. Also exposes helper functions to resolve instrument ids by name, ensure the audio context is ready before sending commands, and keep suppression timers for optimistic UI updates.
 
-#### `src/constants/ui.js` (10 lines)
+### Supporting Assets
+#### `package.json`
+Defines the `npm start` script (`node server.js`) and runtime dependencies (`express`, `socket.io`).
 
-**Purpose**: UI-related constants
-
-**Exports**:
-- `STEP_COUNT` (16) - Default sequencer steps
-- `STEP_COUNT_MIN` (1) - Minimum step count
-- `STEP_COUNT_MAX` (128) - Maximum step count
-- `STEP_GRID_COLUMNS` (16) - Grid column layout
-- `ROOM_ID_PATTERN` - RegEx for room ID validation
-
-**Dependencies**: None
-
-**Verification**: ✅ Clean separation of UI constants
-
----
-
-### 3. Utilities Layer
-
-#### `src/utils/helpers.js` (200 lines)
-
-**Purpose**: General utility functions used throughout the application
-
-**Exports** (18 functions):
-
-**Color Utilities**:
-- `hexToRgba(hex, alpha)` - Convert hex color to rgba with alpha
-
-**Value Clamping**:
-- `clampStepCount(value)` - Clamp to valid step count range
-- `clampTempo(value, currentTempo)` - Clamp to valid BPM range
-- `clampValue(value, min, max)` - Generic value clamping
-
-**Formatting**:
-- `formatStepCountLabel(count)` - Format "N step(s)"
-- `formatBytes(bytes)` - Format bytes to KB/MB/GB
-- `formatDuration(seconds)` - Format seconds to MM:SS
-- `formatParamDisplay(value, def)` - Format parameter values
-
-**Room Management**:
-- `generateRoomId(length)` - Generate random room code
-- `normalizeRoomId(input)` - Validate and normalize room ID
-
-**Instrument Helpers**:
-- `sliderParam(key, label, min, max, step)` - Create slider parameter definition
-- `selectParam(key, label, options)` - Create select parameter definition
-
-**Step Factories**:
-- `createEmptyMelodicStep()` - Create empty melodic step
-- `createEmptyDrumStep()` - Create empty drum step
-- `createEmptySamplerStep()` - Create empty sampler step
-- `createDefaultSamplerSlot(slotId)` - Create default sampler slot configuration
-
-**UI Helpers**:
-- `createPitchSelect(selected)` - Create DOM select element for note selection
-
-**Dependencies**:
-- `constants/audio.js`, `constants/ui.js`, `constants/instruments.js`
-
-**Verification**: ✅ All functions pure (no side effects), well-tested patterns
-
----
-
-#### `src/utils/audio.js` (150 lines)
-
-**Purpose**: Audio-specific utility functions
-
-**Exports** (7 functions):
-
-**Audio Processing**:
-- `noteToFrequency(note)` - Convert note string (e.g., "C4") to frequency in Hz
-- `createNoiseBuffer(ctx)` - Create white noise buffer (cached, 1 second)
-
-**Data Encoding**:
-- `base64ToArrayBuffer(base64)` - Decode base64 to ArrayBuffer
-- `arrayBufferToBase64(buffer)` - Encode ArrayBuffer to base64
-- `createReversedAudioBuffer(ctx, buffer)` - Create reversed copy of audio buffer
-
-**Recording Utilities**:
-- `mergeRecordingChunks(chunks, totalLength)` - Merge Float32Array chunks
-- `encodeWavFromInterleaved(interleaved, channelCount, sampleRate)` - Encode 32-bit float WAV file
-- `writeString(view, offset, text)` - Write string to DataView
-
-**Dependencies**: None (pure audio utilities)
-
-**Implementation Notes**:
-- Noise buffer is cached after first creation
-- Base64 encoding uses chunked processing for large arrays
-- WAV encoding uses 32-bit IEEE float format (format code 3)
-
-**Verification**: ✅ Efficient implementations, proper error handling
-
----
-
-### 4. State Management Layer
-
-#### `src/state/main.js` (301 lines)
-
-**Purpose**: Centralized application state and state mutation functions
-
-**Exports**:
-
-**State Object**:
-```javascript
-state = {
-  isInRoom: false,
-  roomId: null,
-  transport: { bpm, playing, sessionStartTime, lastScheduledStart },
-  instruments: Map<id, instrument>, // instrument.lockedBy: string | null
-  instrumentOrder: string[],
-  activeInstrumentId: string | null,
-  tempoPreview: number,
-  ui: {
-    sidebarOpen: boolean
-  }
-}
-```
-
-**State Mutations** (11 functions):
-- `setRoomId(roomId)` - Set current room
-- `setTransportPlaying(playing)` - Set play/stop state
-- `setTempo(bpm)` - Set tempo
-- `addInstrument(instrument)` - Add instrument to state
-- `removeInstrument(instrumentId)` - Remove instrument
-- `setActiveInstrument(instrumentId)` - Set active instrument
-- `setSidebarOpen(isOpen)` - Update overlay sidebar visibility
-- `updateInstrumentParams(instrumentId, params)` - Update instrument parameters
-- `updateInstrumentName(instrumentId, name)` - Update instrument display name
-- `setInstrumentLockedBy(instrumentId, lockedBy)` - Track synth lock ownership per instrument
-
-**State Hydration**:
-- `hydrateState(payload)` - Load complete state from server
-
-**Normalization Functions** (5 functions):
-- `normalizeInstrument(instrument)` - Validate and normalize instrument data (ensures `lockedBy` is socketId or null)
-- `normalizeSamplerParams(params)` - Normalize sampler slot parameters
-- `normalizeSamplerSample(sample)` - Validate sample data
-- `normalizeSamplerStep(step)` - Normalize sampler step
-- `sanitizeInstrumentName(rawName, type)` - Clamp and normalize instrument names
-
-**Helper Functions**:
-- `ensureLocalInstrumentCapacity(instrument, stepCount)` - Ensure steps array has capacity
-- `setInstrumentStepCountLocal(instrumentId, stepCount)` - Set step count locally
-- `getStepDurationMs()` - Calculate step duration from current BPM
-
-**Dependencies**:
-- `constants/audio.js`, `constants/ui.js`, `constants/instruments.js`
-- `utils/helpers.js`
-
-**Verification**: ✅ Single source of truth, pure mutation functions, proper validation
-
----
-
-#### `src/state/audio.js` (96 lines)
-
-**Purpose**: Audio context state and socket-related state management
-
-**Exports**:
-
-**Audio State Object**:
-```javascript
-audioState = {
-  context: AudioContext | null,
-  masterGain: GainNode | null,
-  schedulerId: number | null,
-  nextStepIndex: number,
-  lastStepDurationMs: number | null,
-  isRecording: boolean,
-  recordingNode: AudioWorkletNode | null,
-  recordingChunks: Float32Array[],
-  recordingSampleRate: number | null,
-  recordingContextSampleRate: number | null,
-  recordingChannelCount: number,
-  recordingTotalSamples: number,
-  recordingFrameCount: number,
-  recordingByteLength: number,
-  recordingStatsLastUpdate: number,
-  recordingModuleLoaded: boolean,
-  samplerBuffers: Map<key, {buffer, reversedBuffer, meta}>,
-  pendingSamplerLoads: Map<key, version>
-}
-```
-
-**Socket State Object**:
-```javascript
-socketState = {
-  instrumentElements: Map<id, element>,
-  pendingRoomRequest: boolean,
-  roomRequestTimeoutId: number | null,
-  pendingRoomRequestMeta: { mode: 'create' | 'join', roomId: string } | null,
-  pendingPings: Map<id, {clientSendTime}>,
-  clockOffsetMs: number,
-  latencyEstimateMs: number,
-  hasSyncSample: boolean,
-  suppressedInstrumentUpdates: Map<instrumentId, number>
-}
-```
-
-**Audio State Mutations** (9 functions):
-- `setAudioContext(context)`, `setMasterGain(gain)`, `setSchedulerId(id)`
-- `setNextStepIndex(index)`, `setRecordingState(isRecording)`
-- `addRecordingChunk(chunk)`, `clearRecordingChunks()`
-- `setSamplerBuffer(key, buffer)`, `deleteSamplerBuffer(key)`, `clearSamplerBuffers()`
-
-**Socket State Mutations** (5 functions):
-- `setClockOffset(offsetMs)`, `setLatencyEstimate(latencyMs)`
-- `setHasSyncSample(hasSample)`, `clearPendingPings()`, `setPendingRoomRequest(pending)`
-
-**Dependencies**: None
-
-**Verification**: ✅ Clean separation of concerns, all mutations explicit
-
----
-
-### 5. UI Layer
-
-#### `src/ui/main.js` (216 lines)
-
-**Purpose**: Main UI management, DOM references, and view switching
-
-**Exports**:
-
-**DOM Element References** (18 elements):
-- Landing page: `landingEl`, `createRoomBtn`, `joinRoomBtn`, `roomCodeDisplayEl`
-- Sequencer: `sequencerEl`, `leaveRoomBtn`, `transportToggleBtn`, `recordToggleBtn`
-- Controls: `addSynthBtn`, `tempoSlider`, `tempoInputField`, `tempoValueEl`
-- Display: `roomDisplayEl`, `syncStatusEl`, `connectionsEl`, `recordingStatusEl`
-- Instruments: `instrumentListEl`, `instrumentEmptyEl`, `instrumentTemplate`
-- Modal: `addSynthModal`, `closeSynthModalBtn`
-
-**View Management** (4 functions):
-- `showSequencer()` - Show main sequencer interface
-- `showLanding()` - Show landing/join page
-- `openSynthModal()` - Open instrument selection modal
-- `closeSynthModal()` - Close instrument selection modal
-
-**Rendering Functions** (6 functions):
-- `renderTransport()` - Update transport controls (play/stop, tempo)
-- `renderInstruments()` - Render all instrument cards
-- `renderEmptyState()` - Show "no instruments" message
-- `updateConnectionsDisplay(count)` - Update connection counter
-- `updateSyncStatus()` - Update clock sync indicator
-- `showRoomCodeHint(roomId)` - Display room code
-
-**Setup Functions** (2 functions):
-- `setupSynthModal(socket)` - Setup instrument selection modal
-- `primeAudioUnlock()` - Setup audio context unlock on user interaction
-
-**Dependencies**:
-- `state/main.js`, `state/audio.js`
-- Dynamic imports to avoid circular dependencies:
-  - `ui/tempo-controls.js`, `ui/instrument-card.js`
-  - `audio/recording.js`, `audio/scheduler.js`
-
-**Implementation Notes**:
-- Uses dynamic imports to break circular dependencies
-- All DOM elements exported for use by other modules
-- Transport rendering coordinates multiple modules
-
-**Verification**: ✅ Proper async handling, no circular dependencies
-
----
-
-#### `src/ui/instrument-card.js` (1,353 lines)
-
-**Purpose**: Comprehensive instrument card rendering and management
-
-**Exports**:
-
-**Helper Functions**:
-- `getVisibleStepSlots(stepCount)` - Calculate visible step grid slots
-- `formatStepIndex(index, visibleTotal)` - Format step number with padding
-
-**Core Rendering** (5 functions):
-- `renderInstrument(instrumentId)` - Render complete instrument
-- `ensureInstrumentCard(instrument)` - Create card if doesn't exist
-- `updateInstrumentCard(card, instrument)` - Update existing card
-- `removeInstrumentCard(instrumentId)` - Remove card from DOM
-- `renderEmptyState()` - Show empty state message
-
-**Playback Indicators**:
-- `updatePlaybackIndicators(stepIndex)` - Highlight current step across all instruments
-
-**Instrument Interaction**:
-- `setActiveInstrument(instrumentId, options)` - Set active instrument (optional `{ scrollIntoView, focus }`)
-- `updateActiveInstrumentHighlight()` - Update visual highlighting
-- `requestInstrumentStepCountChange(instrumentId, nextStepCount, options)` - Change step count (optional `{ skipFullRender }` to avoid full card redraw)
-  - Includes inline rename support via contextual input (syncs to server)
-
-**Parameter Controls**:
-- `renderParamControls(container, instrument, definition)` - Render parameter sliders/selects
-- `resolveInstrumentParamValue(instrument, paramDef)` - Get current parameter value
-- `createInstrumentParamUpdate(instrument, paramDef, value)` - Create update payload
-
-**Step Grid Rendering** (3 types):
-- `renderStepGrid(container, instrument)` - Main step grid dispatcher
-- `renderMelodicStepGrid(container, instrument)` - TB-303/Poly synth grid
-- `renderDrumStepGrid(container, instrument)` - TR-808 drum grid
-- `renderSamplerStepGrid(container, instrument)` - Sampler trigger grid
-
-**Drum-Specific**:
-- `renderDrumSelector(entry, instrument)` - Drum layer selector
-
-**Sampler-Specific** (10 functions):
-- `renderSamplerSelector(entry, instrument, definition)` - Sampler slot selector
-- `renderSamplerParamControls(container, instrument)` - Sampler parameter controls
-- `appendSamplerRangeControl(...)` - Add range control (volume, pitch, etc.)
-- `appendSamplerToggleControl(...)` - Add toggle control (reverse, mute)
-- `updateSamplerSlotLocal(instrumentId, slotId, updates)` - Update local sampler state
-- `emitSamplerParamUpdate(instrumentId, slotId, updates)` - Emit sampler update to server
-- `handleSamplerFileUpload(instrumentId, slotId, file)` - Process uploaded audio file
-- `handleSamplerSampleClear(instrumentId, slotId)` - Clear sample from slot
-- `enableSamplerSlotDrop(target, instrumentId, slotId, infoLabel)` - Enable drag & drop
-- `validateSamplerFile(file)` - Validate audio file
-
-**Dependencies**:
-- `state/main.js`, `state/audio.js`
-- `constants/audio.js`, `constants/ui.js`, `constants/instruments.js`
-- `utils/helpers.js`
-- `ui/main.js` (DOM element references)
-
-**Implementation Notes**:
-- Largest module (1,353 lines) - handles all instrument visualization
-- Uses event delegation for step buttons
-- Drag & drop support for sample loading
-- Base64 encoding for sample transfer
-- Inline instrument renaming with optimistic UI update and server acknowledgment
-- Adds synth lock toggle per instrument card; disables parameter/step controls when another user holds the lock
-
-**Verification**: ✅ Complex but well-structured, handles all instrument types correctly
-
----
-
-#### `src/ui/sidebar.js` (291 lines)
-
-**Purpose**: Overlay instrument navigator with backdrop dimming and activation shortcuts
-
-**Exports**:
-- `initializeSidebar()` - Wire toggle control, apply overlay defaults, and sync accessibility attributes
-- `renderInstrumentSidebar()` - Render sidebar list using `state.instrumentOrder`
-- `updateSidebarEntry(instrumentId)` - Refresh name and type for a specific instrument
-- `removeInstrumentSidebarEntry(instrumentId)` - Remove sidebar entry for deleted instruments
-- `updateSidebarSelection()` - Sync active instrument highlight with sidebar items
-- `openSidebar()` / `closeSidebar()` - Explicit controls for other modules if needed
-
-**Responsibilities**:
-- Manages overlay/backdrop state with global `state.ui.sidebarOpen`, body classes, and ARIA sync
-- Provides instrument count, name, and type list with empty state messaging
-- Handles sidebar clicks to activate instruments without circular imports (dynamic import)
-- Closes on outside clicks, Escape, or synth selection to keep modal behavior consistent
-
-**Dependencies**:
-- `state/main.js`
-- `constants/instruments.js`
-- Dynamic import: `ui/instrument-card.js` (activation handler)
-
-**Verification**: ✅ Sidebar stays synchronized with instrument mutations/selection and remains responsive with toggle controls
-
----
-
-#### `src/ui/tempo-controls.js` (112 lines)
-
-**Purpose**: Tempo slider and input field management
-
-**Exports**:
-
-**State**:
-- `tempoInputState` - Object tracking manual editing state
-
-**Functions**:
-- `updateTempoDisplay(value)` - Update tempo slider, input, and display
-- `commitTempo(bpm, socket)` - Commit tempo change and emit to server
-- `setupTempoControls(socket)` - Setup event listeners for tempo controls
-
-**Dependencies**:
-- `state/main.js`
-- `constants/audio.js`
-- `utils/helpers.js`
-- `ui/main.js` (DOM elements)
-- Dynamic import: `audio/scheduler.js` (to sync after tempo change)
-
-**Event Handling**:
-- Slider `input`: Preview tempo (no commit)
-- Slider `change`: Commit tempo
-- Input field `keydown`: Track manual editing, commit on Enter, cancel on Escape
-- Input field `input`: Commit if not manually editing
-- Input field `change`: Commit and reset manual editing flag
-- Input field `blur`: Reset manual editing flag
-
-**Implementation Notes**:
-- Manual editing flag prevents automatic commits while typing
-- Tempo is clamped on input and commit
-- Syncs audio scheduler after tempo change
-- Emits socket event only when in room
-
-**Verification**: ✅ Complex state management handled correctly, good UX
-
----
-
-### 6. Audio Engine Layer
-
-#### `src/audio/main.js` (75 lines)
-
-**Purpose**: Core audio context management and clock synchronization
-
-**Exports**:
-
-**Audio Context Management**:
-- `ensureAudioContext()` - Create or resume AudioContext with master gain
-  - Creates AudioContext if needed
-  - Resumes if suspended
-  - Sets up master gain (0.8)
-  - Prepares sampler audio for existing instruments
-  - Returns AudioContext or null
-
-**Clock Synchronization** (3 functions):
-- `getServerSyncedTime()` - Get server-synchronized time (client time + offset)
-- `getClientAbsoluteTime()` - Get absolute client time (performance.timeOrigin + now)
-- `applyClockCorrection(offsetSample, latencySample)` - Apply smoothed clock correction
-  - Uses exponential moving average for smoothing
-  - Updates `socketState.clockOffsetMs` and `latencyEstimateMs`
-  - Sets `hasSyncSample` flag
-
-**Sync Status**:
-- `updateSyncStatus()` - Update sync status UI indicator
-
-**Dependencies**:
-- `state/main.js`, `state/audio.js`
-- `constants/audio.js`, `constants/instruments.js`
-- Dynamic import: `audio/instruments/sampler.js`
-
-**Implementation Notes**:
-- Master gain set to 0.8 to prevent clipping
-- Clock sync uses exponential smoothing for stability
-- Prepares sampler buffers on context creation
-
-**Verification**: ✅ Proper audio context lifecycle management, smooth clock sync
-
----
-
-#### `src/audio/scheduler.js` (186 lines)
-
-**Purpose**: Step sequencing and precise audio event scheduling
-
-**Exports**:
-
-**Core Functions**:
-- `getCurrentStepIndex()` - Calculate current step based on elapsed time
-- `syncAudioScheduler()` - Synchronize and start audio scheduler
-  - Handles tempo changes (including slowing)
-  - Schedules next steps
-  - Updates playback indicators
-  - Starts interval timer if needed
-- `stopAudioScheduler()` - Stop scheduler and reset state
-- `runAudioScheduler()` - Main scheduler loop (called every AUDIO_LOOKAHEAD_MS)
-  - Schedules steps within scheduling window
-  - Uses server-synced time for accuracy
-
-**Step Scheduling**:
-- `scheduleStep(stepNumber, when)` - Schedule all instruments for a step
-  - Loops through instruments in order
-  - Ensures step capacity
-  - Handles per-instrument step counts (modulo)
-  - Only schedules active steps
-- `scheduleInstrumentStep(instrument, step, when)` - Dispatch to instrument-specific scheduler
-  - TB-303: `scheduleTB303()`
-  - TR-808: `scheduleTR808()`
-  - SAMPLER: `scheduleSampler()`
-  - POLY: `schedulePolySynth()`
-
-**Dependencies**:
-- `state/main.js`, `state/audio.js`
-- `constants/audio.js`, `constants/ui.js`, `constants/instruments.js`
-- `utils/helpers.js`
-- `audio/main.js`
-- `audio/instruments/tb303.js`, `audio/instruments/tr808.js`
-- `audio/instruments/sampler.js`, `audio/instruments/poly-synth.js`
-- Dynamic import: `ui/instrument-card.js` (for playback indicators)
-
-**Timing Algorithm**:
-1. Calculate step duration from BPM
-2. Determine current step from elapsed time
-3. Schedule steps ahead within AUDIO_SCHEDULE_AHEAD_SECONDS window
-4. Use Web Audio API currentTime for sample-accurate scheduling
-5. Convert server time to audio context time
-
-**Implementation Notes**:
-- **CRITICAL FIX APPLIED**: Uses synchronous imports (not dynamic) for instruments
-- Handles tempo slowdown gracefully (rewinds nextStepIndex if needed)
-- Lookahead scheduling prevents audio dropouts
-- Supports per-instrument step counts
-
-**Verification**: ✅ Precise timing, no async issues, handles edge cases
-
----
-
-#### `src/audio/recording.js` (369 lines)
-
-**Purpose**: Audio recording via AudioWorklet and WAV export
-
-**Exports**:
-
-**Recording Control**:
-- `isRecordingSupported()` - Check if AudioWorklet is supported
-- `toggleRecording()` - Toggle recording on/off
-- `startRecording()` - Start recording
-  - Ensures audio context
-  - Loads recording worklet
-  - Creates AudioWorkletNode
-  - Connects master gain to recorder
-  - Sets up message handlers
-- `stopRecording(options)` - Stop recording
-  - Disconnects recorder node
-  - Merges recording chunks
-  - Encodes to WAV
-  - Downloads file (optional)
-  - Clears recording data
-
-**Recording Statistics**:
-- `updateRecordButton(isRecording)` - Update record button UI
-- `updateRecordingStatsDisplay()` - Update recording stats (duration, size)
-- `maybeUpdateRecordingStatsDisplay()` - Throttled stats update
-
-**Message Handling**:
-- `handleRecordingMessage(event)` - Process messages from AudioWorklet
-  - Handles 'chunk' events (audio data)
-  - Handles 'error' events
-
-**Worklet Management**:
-- `ensureRecordingWorklet(ctx)` - Load recording worklet module (async)
-
-**Data Management**:
-- `clearRecordingData()` - Clear all recording state
-- `downloadBlob(blob, filename)` - Trigger file download
-
-**Dependencies**:
-- `state/audio.js`
-- `constants/audio.js`
-- `audio/main.js`
-- `ui/main.js`
-- `utils/audio.js` (WAV encoding)
-
-**Recording Flow**:
-1. User clicks record button
-2. Audio worklet processes audio in real-time
-3. Worklet sends chunks via postMessage
-4. Chunks accumulated in `recordingChunks`
-5. On stop: merge chunks → encode WAV → download
-
-**AudioWorklet Expectations**:
-- Registered as 'seqroom-recorder'
-- Sends 'chunk' messages with Float32Array data
-- Sends 'error' messages on failure
-
-**Implementation Notes**:
-- Uses 32-bit float WAV encoding
-- Accumulates chunks for memory efficiency
-- Stats update throttled to 200ms
-- Supports manual and automatic download
-
-**Verification**: ✅ Proper async handling, error handling, resource cleanup
-
----
-
-#### `src/audio/instruments/tb303.js` (34 lines)
-
-**Purpose**: TB-303 acid bass synthesizer sound generation
-
-**Exports**:
-- `scheduleTB303(instrument, step, when, ctx)` - Schedule TB-303 note
-
-**Parameters Used**:
-- `waveform` - 'saw' or 'square'
-- `cutoff` (0-1) - Filter cutoff (200-6200 Hz)
-- `resonance` (0-1) - Filter resonance (Q: 0.5-12.5)
-- `envelopeMod` (unused in current implementation)
-- `decay` (0-1) - Envelope decay time (0.1-0.6s)
-- `volume` (0-1) - Output volume
-
-**Step Properties Used**:
-- `pitch` - Note string (e.g., "C2")
-
-**Synthesis Chain**:
-1. Oscillator (saw/square) → frequency from pitch
-2. Biquad lowpass filter → cutoff + resonance
-3. Gain envelope (exponential) → volume decay
-4. Connect to master gain
-
-**Implementation Notes**:
-- Classic TB-303 sound: oscillator → filter → envelope
-- Exponential envelope for punchy sound
-- Filter envelope modulation not yet implemented
-- Note stops after decay + 0.1s buffer
-
-**Dependencies**:
-- `utils/audio.js` (noteToFrequency)
-- `utils/helpers.js` (clampValue)
-
-**Verification**: ✅ Classic acid bass sound, proper audio node cleanup
-
----
-
-#### `src/audio/instruments/tr808.js` (123 lines)
-
-**Purpose**: TR-808 drum machine sound synthesis
-
-**Exports**:
-- `scheduleTR808(instrument, step, when, ctx)` - Main dispatcher
-- Individual drum synthesizers:
-  - `scheduleKick(params, when, ctx)` - Kick drum
-  - `scheduleSnare(params, when, ctx)` - Snare drum
-  - `scheduleHat(params, when, ctx)` - Hi-hat
-  - `scheduleClap(params, when, ctx)` - Hand clap
-
-**Parameters Used**:
-- `volume` (0-1) - Master volume
-- `kickLevel` (0-1) - Kick level
-- `snareLevel` (0-1) - Snare level
-- `hatLevel` (0-1) - Hat level
-- `clapLevel` (0-1) - Clap level
-- `tone` (0-1) - Hat tone control
-
-**Step Properties Used**:
-- `layers` - Object with boolean flags: `{kick, snare, hat, clap}`
-
-**Drum Synthesis**:
-
-**Kick**:
-- Sine oscillator: 110Hz → 40Hz
-- Exponential frequency sweep
-- Short decay (0.28s)
-
-**Snare**:
-- White noise through highpass filter (1000Hz)
-- Short decay (0.2s)
-
-**Hat**:
-- White noise through highpass + bandpass filters
-- Tone control affects filter frequencies and resonance
-- Very short decay (0.15s)
-
-**Clap**:
-- White noise through bandpass filter (2000Hz)
-- Multi-stage envelope for clap effect
-- Medium decay (0.25s)
-
-**Dependencies**:
-- `utils/audio.js` (createNoiseBuffer)
-- `utils/helpers.js` (clampValue)
-- `state/audio.js` (audioState for master gain)
-
-**Implementation Notes**:
-- Classic TR-808 synthesis algorithms
-- All drums use Web Audio API native nodes
-- Noise buffer shared for efficiency
-- Each drum independently leveled
-
-**Verification**: ✅ Authentic 808 sounds, proper parameter scaling
-
----
-
-#### `src/audio/instruments/poly-synth.js` (38 lines)
-
-**Purpose**: Polyphonic synthesizer with ADSR envelope
-
-**Exports**:
-- `schedulePolySynth(instrument, step, when, ctx)` - Schedule synth note
-
-**Parameters Used**:
-- `waveform` - 'sine', 'triangle', 'saw', or 'square'
-- `volume` (0-1) - Output volume
-- `attack` (0-2s) - Attack time
-- `decay` (0-2s) - Decay time
-- `release` (0-3s) - Release time
-- `cutoff` (0-1) - Filter cutoff (400-6400 Hz)
-- `resonance` (0-1) - Filter resonance (Q: 0.5-6.5)
-
-**Step Properties Used**:
-- `pitch` - Note string (e.g., "C4")
-
-**Synthesis Chain**:
-1. Oscillator (selectable waveform) → frequency from pitch
-2. Biquad lowpass filter → cutoff + resonance
-3. ADSR gain envelope
-4. Connect to master gain
-
-**ADSR Envelope**:
-- Attack: 0 → volume (linear ramp)
-- Decay: volume → volume*0.5 (linear ramp)
-- Sustain: volume*0.5 (implied)
-- Release: volume*0.5 → 0 (linear ramp)
-
-**Implementation Notes**:
-- Flexible waveform selection
-- Full ADSR control
-- Filter for timbral shaping
-- Note duration = attack + decay + release
-
-**Dependencies**:
-- `utils/audio.js` (noteToFrequency)
-- `utils/helpers.js` (clampValue)
-- `state/audio.js` (audioState)
-
-**Verification**: ✅ Full synthesis capabilities, proper envelope
-
----
-
-#### `src/audio/instruments/sampler.js` (189 lines)
-
-**Purpose**: Sample playback engine with comprehensive controls
-
-**Exports**:
-
-**Key Generation**:
-- `samplerSlotKey(instrumentId, slotId)` - Generate cache key for sampler buffer
-
-**Playback**:
-- `scheduleSampler(instrument, step, when, ctx)` - Schedule sample playback
-  - Iterates through all slots
-  - Checks mute status
-  - Retrieves buffer from cache
-  - Applies start/end offset trimming
-  - Handles reverse playback
-  - Applies pitch shifting (playback rate)
-  - Applies volume and pan
-
-**Sample Management**:
-- `prepareSamplerAudio(instrument)` - Load samples into audio buffers
-  - Checks if sample needs loading
-  - Manages load queue
-  - Creates reversed buffers
-  - Caches buffers with metadata
-- `loadSamplerSlotSample(ctx, instrumentId, slotId, sample)` - Async load sample
-  - Decodes base64 → ArrayBuffer
-  - Decodes audio data
-  - Creates reversed buffer
-  - Stores in cache
-- `cleanupSamplerBuffers(instrumentId)` - Remove all buffers for instrument
-
-**Slot Parameters**:
-- `volume` (0-1) - Playback volume
-- `pan` (-1 to 1) - Stereo panning
-- `pitch` (-24 to 24 semitones) - Pitch shift via playback rate
-- `startOffset` (0-0.99) - Sample start position
-- `endOffset` (0.01-1) - Sample end position
-- `reverse` - Play sample backwards
-- `mute` - Mute slot
-
-**Dependencies**:
-- `state/audio.js`
-- `constants/instruments.js`
-- `utils/helpers.js`
-- `utils/audio.js` (base64ToArrayBuffer, createReversedAudioBuffer)
-- `audio/main.js`
-
-**Buffer Cache Structure**:
-```javascript
-Map<key, {
-  buffer: AudioBuffer,
-  reversedBuffer: AudioBuffer,
-  meta: {data, updatedAt}
-}>
-```
-
-**Implementation Notes**:
-- Supports 6 simultaneous sample slots (A-F)
-- Trimming uses offset + duration scheduling
-- Pitch shift via playbackRate (2^(semitones/12))
-- Stereo panning via StereoPannerNode
-- Reversed samples pre-computed for efficiency
-- Sample loading is async with version checking
-
-**Verification**: ✅ Complex but robust, handles all edge cases
-
----
-
-### 7. Network Layer
-
-#### `src/socket/main.js` (315 lines)
-
-**Purpose**: WebSocket communication via Socket.IO
-
-**Exports**:
-- `socket` - Socket.IO client instance
-- `setupSocketEvents()` - Setup all event listeners
-- Setup functions:
-  - `setupRoomControls(createBtn, joinBtn, leaveBtn)`
-  - `setupTransportControls(transportBtn, addSynthBtn)`
-  - `setupRecordingControls(recordBtn)`
-
-**Socket Events Handled**:
-
-**Connection**:
-- `connect_error` - Log connection errors
-
-**State Synchronization**:
-- `state:init` - Initial state from server
-  - Hydrates complete application state
-  - Renders UI
-  - Starts scheduler if playing
-  - Updates room display
-
-**Transport**:
-- `transport:update` - Transport state change
-  - Updates BPM, playing state, timestamps
-  - Re-renders transport UI
-  - Syncs scheduler
-- `tempo:update` - Legacy tempo update (for backward compatibility)
-
-**Instruments**:
-- `instrument:added` - New instrument added
-  - Normalizes and stores instrument
-  - Prepares sampler audio
-  - Updates instrument order
-  - Renders instruments
-  - Sets as active
-- `instrument:update` - Instrument modified
-  - Updates instrument in state
-  - Prepares sampler audio
-  - Re-renders specific instrument
-- `instrument:removed` - Instrument deleted
-  - Cleans up sampler buffers
-  - Removes from state
-  - Removes card from UI
-  - Updates active instrument
-- `instrument:rename` - Instrument name updated
-  - Sanitizes and clamps name (48 chars)
-  - Broadcasts updated instrument to room
-  - Acknowledges requester with sanitized name
-- `instrument:order` - Instrument order changed
-  - Updates order array
-  - Re-renders all instruments
-- `synthLocked` - Synth lock granted
-  - Records lock owner by socket id
-  - Updates UI to reflect exclusive control
-- `synthUnlocked` - Synth lock released
-  - Clears local lock owner
-  - Re-enables instrument controls
-- `lockFailed` - Lock request rejected
-  - Displays denial reason (locked/not-found)
-  - Leaves existing lock state untouched
-
-**Clock Synchronization**:
-- `time:ping` - Server ping request
-  - Records client send time
-  - Emits pong with timestamp
-- `time:pong` - Server pong response
-  - Calculates round-trip time
-  - Computes clock offset
-  - Applies smoothed correction
-  - Updates sync status UI
-
-**Connections**:
-- `connections` - Connection count update
-
-**Room Management Functions**:
-
-**connectToRoom(roomId, {mode})**:
-- Prevents duplicate requests
-- Emits 'room:join' or 'room:create'
-- Shows sequencer on success
-- Handles errors with `handleRoomError()`
-
-**leaveRoom()**:
-- Stops audio
-- Stops recording
-- Disconnects socket
-- Clears state
-- Shows landing page
-- Resets UI
-
-**handleRoomError(mode, errorCode)**:
-- Handles room full, not found, invalid ID
-- Shows appropriate error messages
-
-**Outgoing Events**:
-- `room:create` - Create new room
-- `room:join` - Join existing room
-- `room:leave` - Leave room
-- `transport:play` - Start playback
-- `transport:stop` - Stop playback
-- `transport:set-tempo` - Change tempo
-- `instrument:add` - Add instrument
-- `lockSynth` - Request exclusive control of a synth
-- `unlockSynth` - Release synth lock if owned
-- Various instrument update events
-
-**Dependencies**:
-- `state/main.js`, `state/audio.js`
-- `constants/instruments.js`
-- `utils/helpers.js`
-- `ui/main.js`, `ui/instrument-card.js`, `ui/tempo-controls.js`
-- `audio/scheduler.js`, `audio/main.js`
-- `audio/instruments/sampler.js`
-
-**Implementation Notes**:
-- Socket.IO client created with `autoConnect: false`
-- Synth lock workflow uses `lockSynth`/`unlockSynth` events; server broadcasts `synthLocked`/`synthUnlocked` and auto-releases locks on disconnect
-- Must explicitly connect when joining/creating room
-- Clock sync uses ping-pong protocol
-- Exponential moving average for smooth clock correction
-- Handles legacy `tempo:update` for backward compatibility
-
-**Verification**: ✅ Complete event coverage, proper error handling, clock sync working
-
----
+#### `SETUP_AND_RUN.md` and `README.md`
+Provide operational guidance and high-level overview, respectively. Both describe the same modules listed here.
 
 ## Data Flow
+1. **Initialization**
+   - `public/index.html` loads `/socket.io/socket.io.js` and `src/app.js`.
+   - `app.js` calls `setupTempoControls`, `setupTransportControls`, `setupRecordingControls`, `setupRoomControls`, `setupSynthModal`, `primeAudioUnlock`, `setupSocketEvents`, `showLanding`, and `updateTempoDisplay`.
+2. **Room lifecycle**
+   - UI buttons call `connectToRoom` in `socket/main.js`, which ensures the audio context is ready, starts the socket, and emits `room:create` or `room:join`.
+   - `server.js` validates the request, stores/updates room state, and emits `state:init`. The client hydrates state via `hydrateState`, renders instruments/transport, and shows the sequencer view. `leaveRoom` tears everything down and returns to the landing screen.
+3. **Transport and scheduling**
+   - Tempo changes originate from `ui/tempo-controls.js`, update local state, and emit `transport:set-tempo`. The server clamps BPM and broadcasts `transport:update`.
+   - Play/stop buttons emit `transport:play/stop`. When clients receive `transport:update`, `audio/scheduler.js` aligns `audioState.nextStepIndex`, updates playback indicators, and schedules upcoming steps through the instrument schedulers.
+4. **Instrument editing and sampler uploads**
+   - `ui/instrument-card.js` handles step toggles, parameter changes, renames, step count adjustments, and sampler file uploads. Events emit through Socket.IO (`instrument:step`, `instrument:param`, `instrument:rename`, `instrument:set-length`, etc.).
+   - `server.js` normalizes payloads, updates room state, and rebroadcasts `instrument:update`. Clients normalize incoming instruments, refresh cards, and let `audio/instruments/sampler.js` decode new samples as needed.
+5. **Clock synchronization**
+   - `server.js` emits `time:ping` to each client at a fixed interval.
+   - `socket/main.js` responds with `time:pong` timestamps. When `time:sync` arrives, `audio/main.js.applyClockCorrection` smooths the offset/latency in `socketState`, and `ui/main.js.updateSyncStatus` displays the current measurements.
+6. **Recording pipeline**
+   - `socket/main.js.setupRecordingControls` binds the record button to `audio/recording.js.toggleRecording`.
+   - `audio/recording.js` loads `recording-processor.js`, connects it to `audioState.masterGain`, buffers Float32 chunks via `handleRecordingMessage`, and updates `recordingStatusEl`.
+   - When stopped, the module merges chunks, encodes a WAV, and triggers a download. UI state is reset via `updateRecordButton` and `clearRecordingData`.
 
-### Initialization Flow
-```
-app.js (initialize)
-├─→ setupTempoControls
-├─→ setupTransportControls
-├─→ setupRecordingControls
-├─→ setupRoomControls
-├─→ setupSynthModal
-├─→ primeAudioUnlock
-├─→ setupSocketEvents
-└─→ showLanding
-```
-
-### Room Join Flow
-```
-User clicks "Join Room"
-└─→ socket.emit('room:join')
-    └─→ Server: socket.on('room:join')
-        └─→ socket.emit('state:init')
-            ├─→ hydrateState(payload)
-            ├─→ renderTransport()
-            ├─→ renderInstruments()
-            └─→ syncAudioScheduler()
-```
-
-### Playback Flow
-```
-User clicks "Play"
-└─→ socket.emit('transport:play')
-    └─→ Server: broadcast('transport:update')
-        └─→ All clients receive 'transport:update'
-            ├─→ state.transport.playing = true
-            ├─→ renderTransport()
-            └─→ syncAudioScheduler()
-                ├─→ setInterval(runAudioScheduler, 25ms)
-                └─→ runAudioScheduler()
-                    └─→ scheduleStep(stepNumber, when)
-                        └─→ scheduleInstrumentStep()
-                            ├─→ scheduleTB303()
-                            ├─→ scheduleTR808()
-                            ├─→ scheduleSampler()
-                            └─→ schedulePolySynth()
-```
-
-### Clock Sync Flow
-```
-Server sends 'time:ping' every N seconds
-└─→ Client: socket.on('time:ping')
-    ├─→ Record client time T1
-    └─→ socket.emit('time:pong', {id, clientTime: T1})
-        └─→ Server: socket.on('time:pong')
-            └─→ socket.emit('time:pong', {id, clientTime: T1, serverTime: T2})
-                └─→ Client: socket.on('time:pong')
-                    ├─→ Record client time T3
-                    ├─→ Calculate RTT = T3 - T1
-                    ├─→ Calculate offset = T2 - (T1 + RTT/2)
-                    └─→ applyClockCorrection(offset, RTT/2)
-                        └─→ Smooth with exponential moving average
-```
-
-### Instrument Add Flow
-```
-User clicks "Add Synth" → selects type
-└─→ socket.emit('instrument:add', {type})
-    └─→ Server: broadcast('instrument:added', instrument)
-        └─→ All clients receive 'instrument:added'
-            ├─→ normalizeInstrument(instrument)
-            ├─→ state.instruments.set(id, instrument)
-            ├─→ prepareSamplerAudio(instrument) [if sampler]
-            ├─→ state.instrumentOrder.push(id)
-            ├─→ renderInstruments()
-            └─→ setActiveInstrument(id)
-```
-
-### Sample Upload Flow
-```
-User drags audio file to sampler slot
-└─→ handleSamplerFileUpload(instrumentId, slotId, file)
-    ├─→ validateSamplerFile(file)
-    ├─→ Read file as ArrayBuffer
-    ├─→ arrayBufferToBase64(buffer)
-    ├─→ socket.emit('instrument:sampler:sample', {id, slotId, sample})
-        └─→ Server: broadcast('instrument:update')
-            └─→ prepareSamplerAudio(instrument)
-                └─→ loadSamplerSlotSample()
-                    ├─→ base64ToArrayBuffer()
-                    ├─→ ctx.decodeAudioData()
-                    ├─→ createReversedAudioBuffer()
-                    └─→ Store in samplerBuffers cache
-```
-
----
-
-## Verification Status
-
-### ✅ Architecture Verification
-
-**Module Structure**: ✅
-- Clear separation of concerns
-- Proper layering (constants → utils → state → ui/audio/socket → app)
-- No circular dependencies in critical paths
-
-**Import Structure**: ✅
-- All imports corrected from wrong locations
-- Constants properly separated by domain
-- Helper functions in correct modules
-- No duplicate code
-
-**Async Timing**: ✅
-- **CRITICAL FIX**: Scheduler uses synchronous imports
-- No `.then()` callbacks in audio scheduling
-- Proper async/await in recording module
-- Dynamic imports only for non-time-critical code
-
-**State Management**: ✅
-- Single source of truth in `state/main.js`
-- Explicit mutation functions
-- No direct state modification outside state module
-- Proper validation and normalization
-
-**Audio Engine**: ✅
-- Sample-accurate scheduling
-- Lookahead scheduling prevents dropouts
-- Proper node cleanup (auto-cleanup via stop times)
-- Clock synchronization with smoothing
-
-**Network Layer**: ✅
-- Complete Socket.IO event coverage
-- Proper error handling
-- Clock sync protocol implemented
-- State synchronization working
-
-### ⚠️ Potential Issues (Not Critical)
-
-1. **HTML Not Found**: No HTML file in repository
-   - Need to create or locate HTML file
-   - Must include all required DOM element IDs
-   - Must load Socket.IO before app.js
-   - Must use `<script type="module" src="src/app.js"></script>`
-
-2. **AudioWorklet File Missing**: Recording expects external worklet file
-   - Module name: 'seqroom-recorder'
-   - Must implement chunk messaging protocol
-   - Not critical if recording feature not used
-
-3. **Large Module**: `ui/instrument-card.js` is 1,353 lines
-   - Could be split further (melodic/drum/sampler sub-modules)
-   - Currently manageable with clear section comments
-   - Low priority for refactoring
-
-4. **Dynamic Imports in UI**: Some circular dependency workarounds
-   - Used in `ui/main.js` for non-critical rendering
-   - Does not affect timing-critical code
-   - Acceptable trade-off for cleaner architecture
-
-### 📊 Code Metrics
-
-- **Total Modules**: 19
-- **Total Lines**: 3,452
-- **Average Lines/Module**: 182
-- **Largest Module**: `ui/instrument-card.js` (1,353 lines)
-- **Smallest Module**: `constants/ui.js` (10 lines)
-- **Total Exports**: 142+ functions/objects/constants
-
-### 🎯 Functionality Status
-
-**Without HTML** (testable via module imports):
-- ✅ Constants load correctly
-- ✅ Utilities function properly
-- ✅ State management works
-- ✅ Audio context can be created
-- ✅ Instruments can be synthesized
-- ✅ Socket.IO can connect
-
-**With HTML** (requires testing):
-- ⚠️ UI rendering (needs DOM elements)
-- ⚠️ User interactions (needs event listeners)
-- ⚠️ Full playback flow (needs complete integration)
-- ⚠️ Recording (needs AudioWorklet file)
-
----
-
-## Conclusion
-
-The refactored codebase is **architecturally sound and functionally correct**. All critical issues have been resolved:
-
-✅ Import paths corrected
-✅ Async timing bugs fixed
-✅ Circular dependencies eliminated
-✅ State management centralized
-✅ Audio engine optimized
-✅ Network layer complete
-
-**Ready for integration** once HTML file is created with proper DOM structure and Socket.IO library loaded.
-
-**Recommended Next Steps**:
-1. Create HTML file with all required DOM elements
-2. Create AudioWorklet processor for recording
-3. Test in browser environment
-4. Add automated tests for critical functions
-5. Consider splitting `instrument-card.js` if maintenance becomes difficult
+This documentation reflects the current project structure and module responsibilities; update it whenever files are added, renamed, or repurposed.
