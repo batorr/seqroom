@@ -1320,7 +1320,11 @@ export function updateInstrumentCard(card, instrument) {
     } else if (titleEl) {
         titleEl.textContent = displayName;
     }
-    typeEl.textContent = definition.typeLabel || instrument.type;
+    if (typeEl) {
+        const typeLabel = definition.typeLabel || instrument.type;
+        const creatorName = instrument.creatorDisplayName;
+        typeEl.textContent = creatorName ? `${typeLabel} by ${creatorName}` : typeLabel;
+    }
 
     const paramsContainer = entry.paramsContainer;
     renderParamControls(paramsContainer, instrument, definition);

@@ -22,6 +22,7 @@ import { setupTempoControls, updateTempoDisplay } from './ui/tempo-controls.js';
 
 // Import socket module
 import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls } from './socket/main.js';
+import { setupDisplayNameControls } from './ui/display-name.js';
 
 // Initialize application
 export function initialize() {
@@ -31,6 +32,7 @@ export function initialize() {
     setupRecordingControls(recordToggleBtn);
     setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn);
     setupSynthModal(socket);
+    setupDisplayNameControls();
     primeAudioUnlock();
 
     // Setup socket events

@@ -14,6 +14,9 @@ import {
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
 
+const DISPLAY_NAME_MAX_LENGTH = 32;
+export const DEFAULT_DISPLAY_NAME = 'Guest';
+
 // Main application state
 export const state = {
     isInRoom: false,
@@ -30,6 +33,9 @@ export const state = {
     tempoPreview: DEFAULT_BPM,
     ui: {
         sidebarOpen: false,
+    },
+    user: {
+        displayName: DEFAULT_DISPLAY_NAME,
     },
 };
 
@@ -61,6 +67,32 @@ export function sanitizeInstrumentName(rawName, type) {
         return fallback;
     }
     return trimmed.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
+}
+
+function sanitizeDisplayName(rawName) {
+    if (typeof rawName !== 'string') {
+        return '';
+    }
+    const trimmed = rawName.trim();
+    if (!trimmed.length) {
+        return '';
+    }
+    return trimmed.slice(0, DISPLAY_NAME_MAX_LENGTH);
+}
+
+export function setDisplayName(rawName) {
+    const normalized = sanitizeDisplayName(rawName);
+    state.user.displayName = normalized || '';
+    return state.user.displayName;
+}
+
+export function getDisplayName() {
+    return state.user.displayName || '';
+}
+
+export function getDisplayNameOrDefault() {
+    const normalized = sanitizeDisplayName(state.user.displayName || '');
+    return normalized || DEFAULT_DISPLAY_NAME;
 }
 
 // State mutation functions
@@ -198,6 +230,11 @@ export function normalizeInstrument(instrument) {
         ? instrument.lockedBy.trim()
         : null;
 
+    const normalizedCreatorDisplayName = sanitizeDisplayName(instrument.creatorDisplayName || '');
+    const normalizedCreatorUserId = typeof instrument.creatorUserId === 'string' && instrument.creatorUserId.trim().length
+        ? instrument.creatorUserId.trim()
+        : null;
+
     return {
         id: instrument.id,
         type: instrument.type,
@@ -207,6 +244,8 @@ export function normalizeInstrument(instrument) {
         params: normalizedParams,
         stepCount: normalizedStepCount,
         steps: normalizedSteps,
+        creatorDisplayName: normalizedCreatorDisplayName || undefined,
+        creatorUserId: normalizedCreatorUserId || undefined,
     };
 }
 

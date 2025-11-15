@@ -34,6 +34,8 @@ export const socketState = {
     latencyEstimateMs: 0,
     hasSyncSample: false,
     suppressedInstrumentUpdates: new Map(),
+    pendingInstrumentCreatorLabels: new Map(),
+    pendingDefaultInstrumentLabel: null,
 };
 
 // Audio state mutations

@@ -1,7 +1,7 @@
 // Main UI Module
 // Handles primary UI rendering and view management
 
-import { state } from '../state/main.js';
+import { state, getDisplayNameOrDefault } from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { initializeSidebar, renderInstrumentSidebar } from './sidebar.js';
 
@@ -197,9 +197,20 @@ export function setupSynthModal(socket) {
                 return;
             }
 
-            socket.emit('instrument:add', { type }, (response = {}) => {
-                if (!response.ok && response.error) {
-                    console.error('Failed to add instrument:', response.error);
+            const payload = {
+                type,
+                creatorDisplayName: getDisplayNameOrDefault(),
+                creatorUserId: socket.id || null,
+            };
+            socket.emit('instrument:add', payload, (response = {}) => {
+                if (!response.ok) {
+                    if (response.error) {
+                        console.error('Failed to add instrument:', response.error);
+                    }
+                    return;
+                }
+                if (response.instrument?.id) {
+                    socketState.pendingInstrumentCreatorLabels.set(response.instrument.id, payload.creatorDisplayName);
                 }
             });
             closeSynthModal();

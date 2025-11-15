@@ -1,7 +1,13 @@
 // Socket.IO Communication Module
 // WebSocket event handling and room management
 
-import { state, hydrateState, normalizeInstrument, setInstrumentLockedBy } from '../state/main.js';
+import {
+    state,
+    hydrateState,
+    normalizeInstrument,
+    setInstrumentLockedBy,
+    getDisplayNameOrDefault
+} from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { clampTempo, generateRoomId, normalizeRoomId } from '../utils/helpers.js';
@@ -33,6 +39,8 @@ function resetPendingRoomRequestState() {
 function failPendingRoomRequest(errorCode) {
     const metadata = socketState.pendingRoomRequestMeta;
     resetPendingRoomRequestState();
+    socketState.pendingInstrumentCreatorLabels.clear();
+    socketState.pendingDefaultInstrumentLabel = null;
     if (metadata && metadata.mode) {
         handleRoomError(metadata.mode, errorCode);
     } else if (errorCode) {
@@ -53,10 +61,22 @@ export function setupSocketEvents() {
 
     socket.on('disconnect', () => {
         resetPendingRoomRequestState();
+        socketState.pendingInstrumentCreatorLabels.clear();
+        socketState.pendingDefaultInstrumentLabel = null;
     });
 
     socket.on('state:init', (payload) => {
         hydrateState(payload);
+        if (socketState.pendingDefaultInstrumentLabel) {
+            const firstInstrumentId = state.instrumentOrder[0];
+            if (firstInstrumentId) {
+                const initialInstrument = state.instruments.get(firstInstrumentId);
+                if (initialInstrument && !initialInstrument.creatorDisplayName) {
+                    initialInstrument.creatorDisplayName = socketState.pendingDefaultInstrumentLabel;
+                }
+            }
+        }
+        socketState.pendingDefaultInstrumentLabel = null;
         renderTransport();
         renderInstruments();
         updateConnectionsDisplay(payload.connections ?? 0);
@@ -84,6 +104,10 @@ export function setupSocketEvents() {
 
     socket.on('instrument:added', (instrument) => {
         const normalized = normalizeInstrument(instrument);
+        if (!normalized.creatorDisplayName && socketState.pendingInstrumentCreatorLabels.has(normalized.id)) {
+            normalized.creatorDisplayName = socketState.pendingInstrumentCreatorLabels.get(normalized.id);
+        }
+        socketState.pendingInstrumentCreatorLabels.delete(normalized.id);
         state.instruments.set(normalized.id, normalized);
         prepareSamplerAudio(normalized);
         if (!state.instrumentOrder.includes(normalized.id)) {
@@ -327,6 +351,8 @@ export function connectToRoom(roomId, { mode }) {
     resetPendingRoomRequestState();
     socketState.pendingRoomRequest = true;
     socketState.pendingRoomRequestMeta = { mode, roomId };
+    socketState.pendingDefaultInstrumentLabel = mode === 'create' ? getDisplayNameOrDefault() : null;
+    socketState.pendingInstrumentCreatorLabels.clear();
 
     state.isInRoom = false;
     state.roomId = null;
@@ -348,7 +374,11 @@ export function connectToRoom(roomId, { mode }) {
         }
         failPendingRoomRequest('request-timeout');
     }, ROOM_REQUEST_TIMEOUT_MS);
-    socket.emit(eventName, { roomId }, (response = {}) => {
+    const eventPayload = { roomId };
+    if (mode === 'create') {
+        eventPayload.displayName = getDisplayNameOrDefault();
+    }
+    socket.emit(eventName, eventPayload, (response = {}) => {
         const wasPending = socketState.pendingRoomRequest;
         resetPendingRoomRequestState();
 
@@ -403,6 +433,8 @@ export function leaveRoom() {
     socket.emit('room:leave');
     socket.disconnect();
     resetPendingRoomRequestState();
+    socketState.pendingInstrumentCreatorLabels.clear();
+    socketState.pendingDefaultInstrumentLabel = null;
 
     state.isInRoom = false;
     state.roomId = null;

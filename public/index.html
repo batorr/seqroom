@@ -77,6 +77,47 @@
         flex-wrap: wrap;
       }
 
+      .display-name-field {
+        width: 100%;
+        max-width: 360px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        text-align: left;
+      }
+
+      .display-name-field label {
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(226, 232, 240, 0.85);
+      }
+
+      #display-name-input {
+        width: 100%;
+        padding: 10px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.65);
+        color: #f8fafc;
+        font-size: 1rem;
+        font-weight: 600;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35);
+      }
+
+      #display-name-input:focus {
+        outline: none;
+        border-color: rgba(56, 189, 248, 0.75);
+        box-shadow: 0 16px 36px rgba(56, 189, 248, 0.25);
+      }
+
+      .display-name-hint {
+        margin: 0;
+        font-size: 0.78rem;
+        letter-spacing: 0.08em;
+        color: rgba(148, 163, 184, 0.85);
+      }
+
       button {
         appearance: none;
         border: none;
@@ -1403,6 +1444,11 @@
       <section id="landing" class="panel">
         <p>Start a room or join an existing code to play a synced multi-synth groove with friends.</p>
         <p id="room-code-display" class="room-code hidden"></p>
+        <div class="display-name-field">
+          <label for="display-name-input">Display name</label>
+          <input id="display-name-input" type="text" maxlength="32" value="Guest" placeholder="Guest" autocomplete="off" />
+          <p class="display-name-hint">Used to label any instruments you add.</p>
+        </div>
         <div class="landing-actions">
           <button id="create-room" class="primary">Create Room</button>
           <button id="join-room" class="subtle">Join Room</button>

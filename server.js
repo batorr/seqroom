@@ -26,6 +26,7 @@ const SynthTypes = Object.freeze({
 const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
 const INSTRUMENT_NAME_MAX_LENGTH = 48;
+const DISPLAY_NAME_MAX_LENGTH = 32;
 
 const TR808_PARAM_SCHEMA = {
   master: {
@@ -132,6 +133,25 @@ function sanitizeInstrumentName(name, type) {
     return fallback;
   }
   return trimmed.slice(0, INSTRUMENT_NAME_MAX_LENGTH);
+}
+
+function sanitizeDisplayName(name) {
+  if (typeof name !== 'string') {
+    return '';
+  }
+  const trimmed = name.trim();
+  if (!trimmed.length) {
+    return '';
+  }
+  return trimmed.slice(0, DISPLAY_NAME_MAX_LENGTH);
+}
+
+function normalizeUserId(userId) {
+  if (typeof userId !== 'string') {
+    return null;
+  }
+  const trimmed = userId.trim();
+  return trimmed.length ? trimmed : null;
 }
 
 function createDefaultParams(type) {
@@ -257,6 +277,8 @@ function createInstrument(type, options = {}) {
   }
 
   const initialStepCount = clampStepCount(options.stepCount ?? STEP_COUNT);
+  const normalizedCreatorDisplayName = sanitizeDisplayName(options.creatorDisplayName || '');
+  const normalizedCreatorUserId = normalizeUserId(options.creatorUserId);
 
   const instrument = {
     id: randomUUID(),
@@ -267,6 +289,8 @@ function createInstrument(type, options = {}) {
     params: createDefaultParams(type),
     stepCount: initialStepCount,
     steps: createStepSequence(type, initialStepCount),
+    creatorUserId: normalizedCreatorUserId,
+    creatorDisplayName: normalizedCreatorDisplayName || null,
   };
 
   if (type === SynthTypes.TR808) {
@@ -356,6 +380,11 @@ function cloneInstrument(instrument) {
   const normalizedStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT) ?? STEP_COUNT);
   instrument.stepCount = normalizedStepCount;
 
+  const normalizedCreatorDisplayName = sanitizeDisplayName(instrument.creatorDisplayName || '');
+  const normalizedCreatorUserId = normalizeUserId(instrument.creatorUserId);
+  instrument.creatorDisplayName = normalizedCreatorDisplayName || null;
+  instrument.creatorUserId = normalizedCreatorUserId;
+
   const base = {
     id: instrument.id,
     type: instrument.type,
@@ -364,6 +393,8 @@ function cloneInstrument(instrument) {
     lockedBy: normalizedLockOwner,
     params: instrument.params,
     stepCount: normalizedStepCount,
+    creatorUserId: normalizedCreatorUserId,
+    creatorDisplayName: normalizedCreatorDisplayName || null,
     steps: instrument.steps.map((step) => {
       const clonedStep = {
         ...step,
@@ -1010,7 +1041,7 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 io.on('connection', (socket) => {
-  socket.on('room:create', async ({ roomId } = {}, callback) => {
+  socket.on('room:create', async ({ roomId, displayName } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const normalized = normalizeRoomId(roomId);
     if (!normalized) {
@@ -1023,7 +1054,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    createRoomState(normalized);
+    createRoomState(normalized, {
+      creatorUserId: socket.id,
+      creatorDisplayName: sanitizeDisplayName(displayName),
+    });
 
     try {
       await joinRoom(socket, normalized);
@@ -1170,7 +1204,7 @@ io.on('connection', (socket) => {
     respond({ ok: true, stepCount: instrument.stepCount });
   });
 
-  socket.on('instrument:add', ({ type, name } = {}, callback) => {
+  socket.on('instrument:add', ({ type, name, creatorDisplayName, creatorUserId } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1181,14 +1215,18 @@ io.on('connection', (socket) => {
     const instrumentType = type && Object.values(SynthTypes).includes(type) ? type : SynthTypes.SIMPLE;
 
     try {
-      const instrument = createInstrument(instrumentType, { name });
+      const instrument = createInstrument(instrumentType, {
+        name,
+        creatorUserId: normalizeUserId(creatorUserId) || socket.id,
+        creatorDisplayName,
+      });
       room.instruments.set(instrument.id, instrument);
       room.instrumentOrder.push(instrument.id);
 
       const payload = cloneInstrument(instrument);
+      respond({ ok: true, instrument: payload });
       io.to(room.id).emit('instrument:added', payload);
       broadcastInstrumentOrder(room.id);
-      respond({ ok: true, instrument: payload });
     } catch (error) {
       respond({ ok: false, error: error.message });
     }
@@ -1446,7 +1484,7 @@ function normalizeRoomId(roomId) {
   return trimmed;
 }
 
-function createRoomState(roomId) {
+function createRoomState(roomId, { creatorUserId = null, creatorDisplayName = '' } = {}) {
   const now = Date.now();
   const state = {
     id: roomId,
@@ -1461,7 +1499,10 @@ function createRoomState(roomId) {
     instrumentOrder: [],
   };
 
-  const defaultInstrument = createInstrument(SynthTypes.SIMPLE);
+  const defaultInstrument = createInstrument(SynthTypes.SIMPLE, {
+    creatorUserId,
+    creatorDisplayName,
+  });
   state.instruments.set(defaultInstrument.id, defaultInstrument);
   state.instrumentOrder.push(defaultInstrument.id);
 
