@@ -10,8 +10,18 @@ import {
 } from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
-import { clampTempo, generateRoomId, normalizeRoomId } from '../utils/helpers.js';
-import { renderTransport, renderInstruments, updateConnectionsDisplay, showSequencer, showLanding, showRoomCodeHint, roomDisplayEl } from '../ui/main.js';
+import { clampTempo } from '../utils/helpers.js';
+import {
+    renderTransport,
+    renderInstruments,
+    updateConnectionsDisplay,
+    showSequencer,
+    showLanding,
+    showRoomCodeHint,
+    updateRoomDisplay,
+    inviteRoomBtn,
+    showInviteLink,
+} from '../ui/main.js';
 import { renderInstrument, removeInstrumentCard, renderEmptyState, setActiveInstrument, updateActiveInstrumentHighlight } from '../ui/instrument-card.js';
 import { updateTempoDisplay } from '../ui/tempo-controls.js';
 import { syncAudioScheduler, stopAudioScheduler } from '../audio/scheduler.js';
@@ -22,6 +32,7 @@ import { prepareSamplerAudio, cleanupSamplerBuffers } from '../audio/instruments
 export const socket = io({ autoConnect: false });
 
 const ROOM_REQUEST_TIMEOUT_MS = 8000;
+let inviteLinkAutoJoinAttempted = false;
 
 function clearRoomRequestTimer() {
     if (socketState.roomRequestTimeoutId) {
@@ -67,6 +78,8 @@ export function setupSocketEvents() {
 
     socket.on('state:init', (payload) => {
         hydrateState(payload);
+        state.roomSlug = payload.roomSlug || payload.slug || state.roomSlug || null;
+        state.membershipRole = payload.role || state.membershipRole || 'guest';
         if (socketState.pendingDefaultInstrumentLabel) {
             const firstInstrumentId = state.instrumentOrder[0];
             if (firstInstrumentId) {
@@ -81,7 +94,8 @@ export function setupSocketEvents() {
         renderInstruments();
         updateConnectionsDisplay(payload.connections ?? 0);
         syncAudioScheduler();
-        roomDisplayEl.textContent = `Room: ${state.roomId ?? '—'}`;
+        showRoomCodeHint(state.roomSlug || '');
+        updateRoomDisplay();
     });
 
     socket.on('transport:update', (transport) => {
@@ -261,29 +275,114 @@ function resolveInstrumentId({ instrumentId, synthName }) {
 // Setup room control event listeners
 export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
     createRoomBtn.addEventListener('click', () => {
-        ensureAudioContext();
-        const roomId = generateRoomId();
-        showRoomCodeHint(roomId);
-        connectToRoom(roomId, { mode: 'create' });
+        const suggestedName = state.roomSlug || state.roomId || '';
+        const input = window.prompt('Name your room:', suggestedName);
+        if (input === null) {
+            return;
+        }
+        const desiredName = input.trim();
+        if (!desiredName) {
+            window.alert('Room name cannot be empty.');
+            return;
+        }
+        connectToRoom({ mode: 'create', roomName: desiredName });
     });
 
     joinRoomBtn.addEventListener('click', () => {
-        ensureAudioContext();
-        const input = window.prompt('Enter room code:');
+        const input = window.prompt('Paste an invite link or token:');
         if (!input) {
             return;
         }
 
-        const normalized = normalizeRoomId(input);
-        if (!normalized) {
-            window.alert('Room codes use letters, numbers, - or _. Try again.');
+        const token = extractInviteToken(input);
+        if (!token) {
+            window.alert('Invite tokens look like random strings or invite URLs. Double-check and try again.');
             return;
         }
 
-        connectToRoom(normalized, { mode: 'join' });
+        connectToRoom({ mode: 'join', token });
     });
 
     leaveRoomBtn.addEventListener('click', () => leaveRoom());
+
+    if (inviteRoomBtn) {
+        inviteRoomBtn.addEventListener('click', () => {
+            if (!state.isInRoom || state.membershipRole !== 'owner') {
+                window.alert('Only the room owner can invite new members.');
+                return;
+            }
+            requestInviteToken();
+        });
+    }
+}
+
+function requestInviteToken() {
+    if (!state.isInRoom || state.membershipRole !== 'owner') {
+        window.alert('Only the room owner can create invite links.');
+        return;
+    }
+    if (!state.roomId) {
+        window.alert('Join a room before creating invites.');
+        return;
+    }
+
+    socket.emit('requestInviteToken', { roomId: state.roomId }, (response = {}) => {
+        if (!response.ok || !response.token) {
+            if (response.error === 'not-authorized') {
+                window.alert('Only the room owner can create invite links.');
+            } else if (response.error === 'not-in-room') {
+                window.alert('Reconnect to your room before inviting.');
+            } else if (response.error) {
+                window.alert(`Unable to create invite token: ${response.error}`);
+            } else {
+                window.alert('Unable to create invite token.');
+            }
+            return;
+        }
+        const slug = response.slug || state.roomSlug || '';
+        const url = buildInviteLink(slug, response.token);
+        showInviteLink(url);
+    });
+}
+
+function buildInviteLink(slug, token) {
+    const origin = window.location.origin;
+    const safeSlug = encodeURIComponent(slug || 'session');
+    return `${origin}/r/${safeSlug}?inv=${encodeURIComponent(token)}`;
+}
+
+function extractInviteToken(rawValue) {
+    if (typeof rawValue !== 'string') {
+        return null;
+    }
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) {
+        try {
+            const url = new URL(trimmed, window.location.origin);
+            const tokenFromQuery = url.searchParams.get('inv');
+            if (tokenFromQuery && tokenFromQuery.trim()) {
+                return tokenFromQuery.trim();
+            }
+        } catch (error) {
+            return null;
+        }
+    }
+
+    if (trimmed.includes('inv=')) {
+        const queryIndex = trimmed.indexOf('inv=');
+        const segment = trimmed.slice(queryIndex + 4);
+        const tokenSegment = segment.split(/[&\s]/)[0];
+        if (tokenSegment && tokenSegment.trim()) {
+            return tokenSegment.trim();
+        }
+        return null;
+    }
+
+    return trimmed;
 }
 
 // Setup transport control event listeners
@@ -344,29 +443,38 @@ export function setupRecordingControls(recordToggleBtn) {
 }
 
 // Connect to a room
-export function connectToRoom(roomId, { mode }) {
+export function connectToRoom({ mode, roomName = '', token = '' }) {
     if (socketState.pendingRoomRequest) {
         return;
     }
+
+    if (mode !== 'create' && mode !== 'join') {
+        return;
+    }
+
+    ensureAudioContext();
     resetPendingRoomRequestState();
     socketState.pendingRoomRequest = true;
-    socketState.pendingRoomRequestMeta = { mode, roomId };
+    socketState.pendingRoomRequestMeta = { mode };
     socketState.pendingDefaultInstrumentLabel = mode === 'create' ? getDisplayNameOrDefault() : null;
     socketState.pendingInstrumentCreatorLabels.clear();
 
     state.isInRoom = false;
     state.roomId = null;
+    state.roomSlug = null;
+    state.membershipRole = 'guest';
     state.instruments.clear();
     state.instrumentOrder = [];
     state.activeInstrumentId = null;
     renderInstruments();
     updateConnectionsDisplay(0);
+    showRoomCodeHint('');
 
     if (!socket.connected) {
         socket.connect();
     }
 
-    const eventName = mode === 'create' ? 'room:create' : 'room:join';
+    const eventName = mode === 'create' ? 'room:create' : 'joinWithInvite';
     clearRoomRequestTimer();
     socketState.roomRequestTimeoutId = window.setTimeout(() => {
         if (!socketState.pendingRoomRequest) {
@@ -374,10 +482,9 @@ export function connectToRoom(roomId, { mode }) {
         }
         failPendingRoomRequest('request-timeout');
     }, ROOM_REQUEST_TIMEOUT_MS);
-    const eventPayload = { roomId };
-    if (mode === 'create') {
-        eventPayload.displayName = getDisplayNameOrDefault();
-    }
+    const eventPayload = mode === 'create'
+        ? { roomName, displayName: getDisplayNameOrDefault() }
+        : { token };
     socket.emit(eventName, eventPayload, (response = {}) => {
         const wasPending = socketState.pendingRoomRequest;
         resetPendingRoomRequestState();
@@ -392,9 +499,18 @@ export function connectToRoom(roomId, { mode }) {
         }
 
         state.isInRoom = true;
-        state.roomId = response.roomId || roomId;
+        state.roomId = response.roomId || null;
+        state.roomSlug = response.slug || state.roomSlug || null;
+        if (mode === 'create') {
+            state.membershipRole = 'owner';
+        }
         showSequencer();
-        roomDisplayEl.textContent = `Room: ${state.roomId}`;
+        showRoomCodeHint(state.roomSlug || '');
+        updateRoomUrl(state.roomSlug || '');
+        updateRoomDisplay();
+        if (inviteRoomBtn) {
+            inviteRoomBtn.disabled = state.membershipRole !== 'owner';
+        }
         import('../ui/main.js').then(({ transportToggleBtn }) => {
             transportToggleBtn.disabled = false;
         });
@@ -402,12 +518,53 @@ export function connectToRoom(roomId, { mode }) {
     });
 }
 
+export function attemptAutoJoinFromInvite() {
+    if (inviteLinkAutoJoinAttempted) {
+        return;
+    }
+    const details = getInviteDetailsFromLocation();
+    if (!details) {
+        return;
+    }
+    inviteLinkAutoJoinAttempted = true;
+    showRoomCodeHint(details.slug);
+    connectToRoom({ mode: 'join', token: details.token });
+    updateRoomUrl(details.slug);
+}
+
+function getInviteDetailsFromLocation() {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+    const { pathname, search } = window.location;
+    if (!pathname.startsWith('/r/')) {
+        return null;
+    }
+    const slugSegment = pathname.slice(3).split('/')[0] || '';
+    const slug = decodeURIComponent(slugSegment).trim();
+    if (!slug) {
+        return null;
+    }
+    const params = new URLSearchParams(search);
+    const token = params.get('inv');
+    if (!token || !token.trim()) {
+        return null;
+    }
+    return { slug, token: token.trim() };
+}
+
 // Handle room connection errors
 export function handleRoomError(mode, errorCode) {
-    if (mode === 'create' && errorCode === 'room-already-exists') {
-        window.alert('Room already exists. Try generating a new code.');
-    } else if (mode === 'join' && errorCode === 'room-not-found') {
-        window.alert('Could not find that room. Check the code and try again.');
+    if (mode === 'create' && errorCode === 'invalid-room-name') {
+        window.alert('Choose a room name with letters or numbers.');
+    } else if (mode === 'create' && errorCode === 'room-already-exists') {
+        window.alert('Room slug already exists. Try a different name.');
+    } else if (mode === 'join' && errorCode === 'token-invalid') {
+        window.alert('Invite token is invalid. Ask the owner for a new link.');
+    } else if (mode === 'join' && errorCode === 'token-expired') {
+        window.alert('Invite token has expired. Request a new invite.');
+    } else if (errorCode === 'room-not-found') {
+        window.alert('Could not find that room. It may have expired.');
     } else if (errorCode === 'invalid-room-id') {
         window.alert('Room code is invalid.');
     } else if (errorCode === 'connection-error') {
@@ -421,6 +578,7 @@ export function handleRoomError(mode, errorCode) {
     }
     showLanding();
     showRoomCodeHint('');
+    updateRoomUrl('');
 }
 
 // Leave current room
@@ -438,6 +596,8 @@ export function leaveRoom() {
 
     state.isInRoom = false;
     state.roomId = null;
+    state.roomSlug = null;
+    state.membershipRole = 'guest';
     state.instruments.clear();
     state.instrumentOrder = [];
     state.activeInstrumentId = null;
@@ -451,4 +611,15 @@ export function leaveRoom() {
     stopAudioScheduler();
     renderInstruments();
     showLanding();
+    showRoomCodeHint('');
+    updateRoomDisplay();
+    updateRoomUrl('');
+}
+
+function updateRoomUrl(slug) {
+    if (typeof window === 'undefined' || !window.history || !window.history.replaceState) {
+        return;
+    }
+    const path = slug ? `/r/${encodeURIComponent(slug)}` : '/';
+    window.history.replaceState({}, document.title, path);
 }

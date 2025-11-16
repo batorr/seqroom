@@ -12,6 +12,7 @@ export const roomCodeDisplayEl = document.getElementById('room-code-display');
 export const createRoomBtn = document.getElementById('create-room');
 export const joinRoomBtn = document.getElementById('join-room');
 export const leaveRoomBtn = document.getElementById('leave-room');
+export const inviteRoomBtn = document.getElementById('invite-room');
 export const transportToggleBtn = document.getElementById('transport-toggle');
 export const recordToggleBtn = document.getElementById('record-toggle');
 export const addSynthBtn = document.getElementById('add-synth');
@@ -27,6 +28,10 @@ export const addSynthModal = document.getElementById('add-synth-modal');
 export const closeSynthModalBtn = document.getElementById('close-synth-modal');
 export const instrumentTemplate = document.getElementById('instrument-card-template');
 export const recordingStatusEl = document.getElementById('recording-status');
+export const inviteModal = document.getElementById('invite-modal');
+export const closeInviteModalBtn = document.getElementById('close-invite-modal');
+export const inviteLinkInput = document.getElementById('invite-link-input');
+export const copyInviteLinkBtn = document.getElementById('copy-invite-link');
 
 initializeSidebar();
 renderInstrumentSidebar();
@@ -37,13 +42,29 @@ export function showSequencer() {
     sequencerEl.classList.remove('hidden');
     transportToggleBtn.disabled = false;
     showRoomCodeHint('');
+    updateRoomDisplay();
+    if (inviteRoomBtn) {
+        inviteRoomBtn.disabled = !state.isInRoom || state.membershipRole !== 'owner';
+    }
 }
 
 export function showLanding() {
     landingEl.classList.remove('hidden');
     sequencerEl.classList.add('hidden');
     transportToggleBtn.disabled = true;
-    roomDisplayEl.textContent = 'Room: —';
+    if (inviteRoomBtn) {
+        inviteRoomBtn.disabled = true;
+    }
+    updateRoomDisplay();
+}
+
+export function updateRoomDisplay() {
+    if (!roomDisplayEl) {
+        return;
+    }
+    const hasRoom = state.isInRoom && (state.roomSlug || state.roomId);
+    const label = hasRoom ? (state.roomSlug || state.roomId) : '—';
+    roomDisplayEl.textContent = `Room: ${label}`;
 }
 
 // Modal management
@@ -64,6 +85,10 @@ export function renderTransport() {
     transportToggleBtn.textContent = state.transport.playing ? 'Stop' : 'Play';
     transportToggleBtn.classList.toggle('playing', state.transport.playing);
     transportToggleBtn.disabled = !state.isInRoom;
+    updateRoomDisplay();
+    if (inviteRoomBtn) {
+        inviteRoomBtn.disabled = !state.isInRoom || state.membershipRole !== 'owner';
+    }
 
     import('../audio/recording.js').then(({ updateRecordButton }) => {
         import('../state/audio.js').then(({ audioState }) => {
@@ -163,13 +188,13 @@ export function updateSyncStatus() {
     syncStatusEl.textContent = `Offset ${offsetLabel} ms · RTT ${latencyLabel} ms`;
 }
 
-export function showRoomCodeHint(roomId) {
-    if (!roomId) {
+export function showRoomCodeHint(slug) {
+    if (!slug) {
         roomCodeDisplayEl.textContent = '';
         roomCodeDisplayEl.classList.add('hidden');
         return;
     }
-    roomCodeDisplayEl.textContent = `Share this code: ${roomId}`;
+    roomCodeDisplayEl.textContent = `Room slug: ${slug}`;
     roomCodeDisplayEl.classList.remove('hidden');
 }
 
@@ -216,6 +241,84 @@ export function setupSynthModal(socket) {
             closeSynthModal();
         });
     });
+}
+
+export function setupInviteModal() {
+    if (!inviteModal) {
+        return;
+    }
+
+    if (closeInviteModalBtn) {
+        closeInviteModalBtn.addEventListener('click', closeInviteModal);
+    }
+
+    inviteModal.addEventListener('click', (event) => {
+        if (event.target === inviteModal) {
+            closeInviteModal();
+        }
+    });
+
+    if (copyInviteLinkBtn && inviteLinkInput) {
+        copyInviteLinkBtn.addEventListener('click', () => {
+            const value = inviteLinkInput.value || '';
+            if (!value) {
+                return;
+            }
+            const copyPromise = navigator.clipboard
+                ? navigator.clipboard.writeText(value)
+                : Promise.reject(new Error('clipboard-unavailable'));
+            copyPromise.then(() => {
+                indicateCopied();
+            }).catch(() => {
+                fallbackCopy(inviteLinkInput);
+                indicateCopied();
+            });
+        });
+    }
+}
+
+export function showInviteLink(link) {
+    if (!inviteModal) {
+        return;
+    }
+    if (inviteLinkInput) {
+        inviteLinkInput.value = link || '';
+        inviteLinkInput.focus();
+        inviteLinkInput.select();
+    }
+    inviteModal.classList.remove('hidden');
+}
+
+export function closeInviteModal() {
+    if (!inviteModal) {
+        return;
+    }
+    inviteModal.classList.add('hidden');
+}
+
+function fallbackCopy(input) {
+    if (!input) {
+        return;
+    }
+
+    try {
+        input.focus();
+        input.select();
+        document.execCommand('copy');
+    } catch (error) {
+        console.warn('Failed to copy invite link:', error);
+    }
+}
+
+function indicateCopied() {
+    if (!copyInviteLinkBtn) {
+        return;
+    }
+    const originalLabel = copyInviteLinkBtn.textContent;
+    copyInviteLinkBtn.textContent = 'Copied';
+    window.setTimeout(() => {
+        copyInviteLinkBtn.textContent = originalLabel || 'Copy';
+    }, 1500);
 }
 
 export function primeAudioUnlock() {

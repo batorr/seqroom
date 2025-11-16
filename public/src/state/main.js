@@ -21,6 +21,7 @@ export const DEFAULT_DISPLAY_NAME = 'Guest';
 export const state = {
     isInRoom: false,
     roomId: null,
+    roomSlug: null,
     transport: {
         bpm: DEFAULT_BPM,
         playing: false,
@@ -34,6 +35,7 @@ export const state = {
     ui: {
         sidebarOpen: false,
     },
+    membershipRole: 'guest',
     user: {
         displayName: DEFAULT_DISPLAY_NAME,
     },
@@ -159,6 +161,8 @@ export function updateInstrumentName(instrumentId, name) {
 export function hydrateState(payload) {
     state.isInRoom = true;
     state.roomId = payload.roomId || null;
+    state.roomSlug = payload.roomSlug || payload.slug || null;
+    state.membershipRole = payload.role || 'guest';
 
     const transport = payload.transport || {};
     state.transport = {

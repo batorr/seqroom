@@ -1,7 +1,7 @@
 // General utility functions
 
 import { TEMPO_MIN, TEMPO_MAX, DEFAULT_BPM, NOTE_OPTIONS } from '../constants/audio.js';
-import { STEP_COUNT, STEP_COUNT_MIN, STEP_COUNT_MAX, ROOM_ID_PATTERN } from '../constants/ui.js';
+import { STEP_COUNT, STEP_COUNT_MIN, STEP_COUNT_MAX } from '../constants/ui.js';
 import { TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
 
 // Color manipulation
@@ -102,28 +102,6 @@ export function formatParamDisplay(value, def) {
         return numeric.toFixed(2);
     }
     return numeric.toFixed(1);
-}
-
-// Room ID utilities
-export function generateRoomId(length = 6) {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let result = '';
-    for (let i = 0; i < length; i += 1) {
-        const index = Math.floor(Math.random() * alphabet.length);
-        result += alphabet[index];
-    }
-    return result;
-}
-
-export function normalizeRoomId(input) {
-    if (typeof input !== 'string') {
-        return null;
-    }
-    const trimmed = input.trim();
-    if (!ROOM_ID_PATTERN.test(trimmed)) {
-        return null;
-    }
-    return trimmed.toUpperCase();
 }
 
 // Instrument parameter factories

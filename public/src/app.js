@@ -14,14 +14,15 @@ import {
     transportToggleBtn,
     recordToggleBtn,
     addSynthBtn,
-    showLanding
+    showLanding,
+    setupInviteModal
 } from './ui/main.js';
 
 // Import tempo controls
 import { setupTempoControls, updateTempoDisplay } from './ui/tempo-controls.js';
 
 // Import socket module
-import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls } from './socket/main.js';
+import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls, attemptAutoJoinFromInvite } from './socket/main.js';
 import { setupDisplayNameControls } from './ui/display-name.js';
 
 // Initialize application
@@ -32,6 +33,7 @@ export function initialize() {
     setupRecordingControls(recordToggleBtn);
     setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn);
     setupSynthModal(socket);
+    setupInviteModal();
     setupDisplayNameControls();
     primeAudioUnlock();
 
@@ -43,6 +45,8 @@ export function initialize() {
 
     // Update tempo display
     updateTempoDisplay(state.transport.bpm);
+
+    attemptAutoJoinFromInvite();
 }
 
 // Auto-initialize when module loads

@@ -2,7 +2,7 @@ const path = require('path');
 const os = require('os');
 const express = require('express');
 const http = require('http');
-const { randomUUID } = require('crypto');
+const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
 const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
@@ -12,9 +12,17 @@ const STEP_COUNT_MAX = 128;
 const DEFAULT_TEMPO = 120;
 const SESSION_START_DELAY_MS = 2000;
 const SYNC_INTERVAL_MS = 2000;
-const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{4,16}$/;
 const TEMPO_MIN = 30;
 const TEMPO_MAX = 300;
+const ROOM_NAME_MAX_LENGTH = 64;
+const ROOM_SLUG_MAX_LENGTH = 64;
+const ROOM_ID_BYTES = 6; // 12 hex chars
+const INVITE_TOKEN_TTL_SECONDS = 60 * 60;
+const INVITE_TOKEN_HEADER = {
+  alg: 'HS256',
+  typ: 'JWT',
+};
+const INVITE_TOKEN_HEADER_SEGMENT = base64UrlEncode(Buffer.from(JSON.stringify(INVITE_TOKEN_HEADER)));
 
 const SynthTypes = Object.freeze({
   TB303: 'tb-303',
@@ -982,6 +990,7 @@ function getRoomForSocket(socket) {
 function serializeRoomState(room) {
   return {
     roomId: room.id,
+    slug: room.slug,
     transport: cloneTransport(room.transport),
     instruments: room.instrumentOrder
       .map((instrumentId) => room.instruments.get(instrumentId))
@@ -1031,58 +1040,95 @@ function broadcastInstrumentOrder(roomId) {
 }
 
 const rooms = new Map();
+const slugToRoomId = new Map();
 let lastPingId = 0;
 
 const app = express();
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/r/:slug', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 const server = http.createServer(app);
 const io = new Server(server);
 
 io.on('connection', (socket) => {
-  socket.on('room:create', async ({ roomId, displayName } = {}, callback) => {
+  socket.on('room:create', async ({ roomName, displayName } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
-    const normalized = normalizeRoomId(roomId);
-    if (!normalized) {
-      respond({ ok: false, error: 'invalid-room-id' });
+    const sanitizedName = sanitizeRoomName(roomName);
+    if (!sanitizedName) {
+      respond({ ok: false, error: 'invalid-room-name' });
       return;
     }
 
-    if (rooms.has(normalized)) {
-      respond({ ok: false, error: 'room-already-exists' });
-      return;
-    }
-
-    createRoomState(normalized, {
+    const slug = generateRoomSlug(sanitizedName);
+    const room = createRoomState({
+      roomName: sanitizedName,
+      roomSlug: slug,
       creatorUserId: socket.id,
       creatorDisplayName: sanitizeDisplayName(displayName),
+      ownerUserId: socket.id,
     });
 
     try {
-      await joinRoom(socket, normalized);
-      respond({ ok: true, roomId: normalized });
+      await joinRoom(socket, room.id, { role: 'owner' });
+      respond({ ok: true, roomId: room.id, slug: room.slug });
     } catch (error) {
       respond({ ok: false, error: error.message });
     }
   });
 
-  socket.on('room:join', async ({ roomId } = {}, callback) => {
+  socket.on('joinWithInvite', async ({ token } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
-    const normalized = normalizeRoomId(roomId);
-    if (!normalized) {
-      respond({ ok: false, error: 'invalid-room-id' });
+    const validation = validateInviteToken(token);
+    if (!validation.ok) {
+      respond({ ok: false, error: validation.error });
       return;
     }
 
-    if (!rooms.has(normalized)) {
+    const room = rooms.get(validation.roomId);
+    if (!room) {
       respond({ ok: false, error: 'room-not-found' });
       return;
     }
 
     try {
-      await joinRoom(socket, normalized);
-      respond({ ok: true, roomId: normalized });
+      await joinRoom(socket, room.id, { role: validation.role });
+      respond({ ok: true, roomId: room.id, slug: room.slug });
+    } catch (error) {
+      respond({ ok: false, error: error.message });
+    }
+  });
+
+  socket.on('requestInviteToken', ({ roomId } = {}, callback) => {
+    const respond = typeof callback === 'function' ? callback : () => {};
+    const activeRoomId = socket.data.roomId;
+    if (!activeRoomId) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    const targetRoomId = roomId || activeRoomId;
+    if (targetRoomId !== activeRoomId) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    const room = rooms.get(activeRoomId);
+    if (!room) {
+      respond({ ok: false, error: 'room-not-found' });
+      return;
+    }
+
+    if (room.ownerUserId !== socket.id || socket.data.roomRole !== 'owner') {
+      respond({ ok: false, error: 'not-authorized' });
+      return;
+    }
+
+    try {
+      const token = createInviteToken(room.id, 'guest');
+      respond({ ok: true, token, slug: room.slug });
     } catch (error) {
       respond({ ok: false, error: error.message });
     }
@@ -1459,35 +1505,32 @@ io.on('connection', (socket) => {
 
     const room = rooms.get(roomId);
     if (room) {
-      const released = releaseInstrumentLocks(room, socket.id);
-      for (const instrument of released) {
-        broadcastInstrumentState(room.id, instrument.id);
-        io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
-      }
+      removeSocketFromRoom(room, socket.id);
     }
 
     socket.data.roomId = undefined;
+    socket.data.roomRole = undefined;
     broadcastConnections(roomId);
   });
 });
 
-function normalizeRoomId(roomId) {
-  if (typeof roomId !== 'string') {
-    return null;
-  }
-
-  const trimmed = roomId.trim();
-  if (!ROOM_ID_PATTERN.test(trimmed)) {
-    return null;
-  }
-
-  return trimmed;
-}
-
-function createRoomState(roomId, { creatorUserId = null, creatorDisplayName = '' } = {}) {
+function createRoomState({
+  roomName = '',
+  roomSlug = '',
+  creatorUserId = null,
+  creatorDisplayName = '',
+  ownerUserId = null,
+} = {}) {
+  const roomId = generateRoomId();
   const now = Date.now();
   const state = {
     id: roomId,
+    name: roomName,
+    slug: roomSlug,
+    secret: createRoomSecret(),
+    ownerUserId: ownerUserId || creatorUserId || null,
+    createdAt: now,
+    members: new Map(),
     legacyPattern: Array(STEP_COUNT).fill(false),
     transport: {
       bpm: DEFAULT_TEMPO,
@@ -1507,10 +1550,13 @@ function createRoomState(roomId, { creatorUserId = null, creatorDisplayName = ''
   state.instrumentOrder.push(defaultInstrument.id);
 
   rooms.set(roomId, state);
+  if (state.slug) {
+    slugToRoomId.set(state.slug, roomId);
+  }
   return state;
 }
 
-async function joinRoom(socket, roomId) {
+async function joinRoom(socket, roomId, { role = 'guest' } = {}) {
   const room = rooms.get(roomId);
   if (!room) {
     throw new Error('room-not-found');
@@ -1519,10 +1565,17 @@ async function joinRoom(socket, roomId) {
   await leaveCurrentRoom(socket);
   await socket.join(roomId);
   socket.data.roomId = roomId;
+   socket.data.roomRole = role;
+   room.members.set(socket.id, {
+     role,
+     joinedAt: Date.now(),
+   });
 
   const state = serializeRoomState(room);
   socket.emit('state:init', {
     roomId,
+    roomSlug: state.slug,
+    role,
     transport: state.transport,
     instruments: state.instruments,
     instrumentOrder: state.instrumentOrder,
@@ -1537,6 +1590,26 @@ async function joinRoom(socket, roomId) {
   emitImmediatePing(socket);
 }
 
+function removeSocketFromRoom(room, socketId) {
+  if (!room || !socketId) {
+    return;
+  }
+
+  const released = releaseInstrumentLocks(room, socketId);
+  for (const instrument of released) {
+    broadcastInstrumentState(room.id, instrument.id);
+    io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
+  }
+
+  room.members.delete(socketId);
+  if (room.members.size === 0) {
+    rooms.delete(room.id);
+    if (room.slug) {
+      slugToRoomId.delete(room.slug);
+    }
+  }
+}
+
 async function leaveCurrentRoom(socket) {
   const { roomId } = socket.data;
   if (!roomId) {
@@ -1545,11 +1618,7 @@ async function leaveCurrentRoom(socket) {
 
   const room = rooms.get(roomId);
   if (room) {
-    const released = releaseInstrumentLocks(room, socket.id);
-    for (const instrument of released) {
-      broadcastInstrumentState(room.id, instrument.id);
-      io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
-    }
+    removeSocketFromRoom(room, socket.id);
   }
 
   try {
@@ -1559,6 +1628,7 @@ async function leaveCurrentRoom(socket) {
   }
 
   socket.data.roomId = undefined;
+  socket.data.roomRole = undefined;
   broadcastConnections(roomId);
 }
 
@@ -1585,6 +1655,160 @@ function broadcastTimePing() {
 
 broadcastTimePing();
 setInterval(broadcastTimePing, SYNC_INTERVAL_MS);
+
+function sanitizeRoomName(roomName) {
+  if (typeof roomName !== 'string') {
+    return null;
+  }
+
+  const trimmed = roomName.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  return trimmed.slice(0, ROOM_NAME_MAX_LENGTH);
+}
+
+function slugifyRoomName(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, ROOM_SLUG_MAX_LENGTH);
+
+  return normalized || '';
+}
+
+function generateRoomSlug(roomName) {
+  const base = slugifyRoomName(roomName) || 'session';
+  let candidate = base;
+  let suffix = 1;
+  while (slugToRoomId.has(candidate)) {
+    suffix += 1;
+    const availableLength = Math.max(0, ROOM_SLUG_MAX_LENGTH - (`-${suffix}`).length);
+    const truncatedBase = base.slice(0, availableLength) || 'session';
+    candidate = `${truncatedBase}-${suffix}`;
+  }
+  return candidate;
+}
+
+function generateRoomId() {
+  return randomBytes(ROOM_ID_BYTES).toString('hex');
+}
+
+function createRoomSecret() {
+  return randomBytes(32);
+}
+
+function base64UrlEncode(buffer) {
+  if (!Buffer.isBuffer(buffer)) {
+    return '';
+  }
+  return buffer.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function base64UrlDecode(segment) {
+  if (typeof segment !== 'string') {
+    return null;
+  }
+  const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4;
+  const padded = normalized + (padding ? '='.repeat(4 - padding) : '');
+  try {
+    return Buffer.from(padded, 'base64');
+  } catch (error) {
+    return null;
+  }
+}
+
+function signInviteToken(data, secret) {
+  return createHmac('sha256', secret).update(data).digest();
+}
+
+function createInviteToken(roomId, role = 'guest') {
+  const room = rooms.get(roomId);
+  if (!room || !room.secret) {
+    throw new Error('room-not-found');
+  }
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + INVITE_TOKEN_TTL_SECONDS;
+  const payload = {
+    roomId: room.id,
+    role: role === 'owner' ? 'owner' : 'guest',
+    nonce: randomBytes(8).toString('hex'),
+    iat: issuedAt,
+    exp: expiresAt,
+  };
+  const payloadSegment = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
+  const unsigned = `${INVITE_TOKEN_HEADER_SEGMENT}.${payloadSegment}`;
+  const signature = base64UrlEncode(signInviteToken(unsigned, room.secret));
+  return `${unsigned}.${signature}`;
+}
+
+function validateInviteToken(token) {
+  if (typeof token !== 'string') {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const segments = token.split('.');
+  if (segments.length !== 3) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const [headerSegment, payloadSegment, signatureSegment] = segments;
+  if (headerSegment !== INVITE_TOKEN_HEADER_SEGMENT) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const payloadBuffer = base64UrlDecode(payloadSegment);
+  if (!payloadBuffer) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(payloadBuffer.toString('utf8'));
+  } catch (error) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  if (!payload || typeof payload.roomId !== 'string' || typeof payload.nonce !== 'string') {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const issuedAt = Number(payload.iat);
+  const expiresAt = Number(payload.exp);
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt)) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (expiresAt <= now) {
+    return { ok: false, error: 'token-expired' };
+  }
+
+  const room = rooms.get(payload.roomId);
+  if (!room || !room.secret) {
+    return { ok: false, error: 'room-not-found' };
+  }
+
+  const signatureBuffer = base64UrlDecode(signatureSegment);
+  if (!signatureBuffer) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  const unsigned = `${headerSegment}.${payloadSegment}`;
+  const expectedSignature = signInviteToken(unsigned, room.secret);
+  if (signatureBuffer.length !== expectedSignature.length || !timingSafeEqual(signatureBuffer, expectedSignature)) {
+    return { ok: false, error: 'token-invalid' };
+  }
+
+  return { ok: true, roomId: room.id, role: 'guest' };
+}
 
 function logLocalAddresses() {
   const nets = os.networkInterfaces();

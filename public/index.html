@@ -168,6 +168,37 @@
         font-weight: 600;
       }
 
+      .invite-link-row {
+        width: 100%;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .invite-link-input {
+        flex: 1;
+        padding: 10px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.65);
+        color: #f8fafc;
+        font-weight: 600;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35);
+      }
+
+      .invite-link-input:focus {
+        outline: none;
+        border-color: rgba(56, 189, 248, 0.75);
+        box-shadow: 0 16px 36px rgba(56, 189, 248, 0.25);
+      }
+
+      .modal-hint {
+        margin: 0 0 16px;
+        font-size: 0.9rem;
+        color: rgba(148, 163, 184, 0.9);
+        text-align: left;
+      }
+
       .hidden {
         display: none !important;
       }
@@ -1489,6 +1520,7 @@
             </div>
             <div class="transport-status-right">
               <span id="connections">0 people connected</span>
+              <button id="invite-room" class="primary">Invite</button>
               <button id="leave-room" class="subtle">Leave</button>
             </div>
           </div>
@@ -1509,6 +1541,22 @@
         </div>
       </section>
     </main>
+
+    <div id="invite-modal" class="hidden">
+      <div class="modal-backdrop">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h3>Share Room Invite</h3>
+            <button id="close-invite-modal" class="subtle" type="button">Close</button>
+          </div>
+          <p class="modal-hint">Send this link to guests so they can join with your invite token.</p>
+          <div class="invite-link-row">
+            <input id="invite-link-input" class="invite-link-input" type="text" readonly value="" />
+            <button id="copy-invite-link" class="primary" type="button">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div id="add-synth-modal" class="hidden">
       <div class="modal-backdrop">
@@ -1562,6 +1610,6 @@
     </template>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script type="module" src="src/app.js"></script>
+    <script type="module" src="/src/app.js"></script>
   </body>
 </html>

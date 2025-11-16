@@ -5,13 +5,3 @@ node_modules/
 .DS_Store
 
 .env
-
-split.js
-
-chunk_1.js
-chunk_2.js
-chunk_3.js
-chunk_4.js
-chunk_5.js
-chunk_6.js
-chunk_7.js
