@@ -44,7 +44,7 @@ export function showSequencer() {
     showRoomCodeHint('');
     updateRoomDisplay();
     if (inviteRoomBtn) {
-        inviteRoomBtn.disabled = !state.isInRoom || state.membershipRole !== 'owner';
+        inviteRoomBtn.disabled = !state.isInRoom;
     }
 }
 
@@ -87,7 +87,7 @@ export function renderTransport() {
     transportToggleBtn.disabled = !state.isInRoom;
     updateRoomDisplay();
     if (inviteRoomBtn) {
-        inviteRoomBtn.disabled = !state.isInRoom || state.membershipRole !== 'owner';
+        inviteRoomBtn.disabled = !state.isInRoom;
     }
 
     import('../audio/recording.js').then(({ updateRecordButton }) => {

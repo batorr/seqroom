@@ -1121,11 +1121,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (room.ownerUserId !== socket.id || socket.data.roomRole !== 'owner') {
-      respond({ ok: false, error: 'not-authorized' });
-      return;
-    }
-
     try {
       const token = createInviteToken(room.id, 'guest');
       respond({ ok: true, token, slug: room.slug });

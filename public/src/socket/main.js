@@ -307,18 +307,14 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
 
     if (inviteRoomBtn) {
         inviteRoomBtn.addEventListener('click', () => {
-            if (!state.isInRoom || state.membershipRole !== 'owner') {
-                window.alert('Only the room owner can invite new members.');
-                return;
-            }
             requestInviteToken();
         });
     }
 }
 
 function requestInviteToken() {
-    if (!state.isInRoom || state.membershipRole !== 'owner') {
-        window.alert('Only the room owner can create invite links.');
+    if (!state.isInRoom) {
+        window.alert('Join a room before creating invites.');
         return;
     }
     if (!state.roomId) {
@@ -328,9 +324,7 @@ function requestInviteToken() {
 
     socket.emit('requestInviteToken', { roomId: state.roomId }, (response = {}) => {
         if (!response.ok || !response.token) {
-            if (response.error === 'not-authorized') {
-                window.alert('Only the room owner can create invite links.');
-            } else if (response.error === 'not-in-room') {
+            if (response.error === 'not-in-room') {
                 window.alert('Reconnect to your room before inviting.');
             } else if (response.error) {
                 window.alert(`Unable to create invite token: ${response.error}`);
@@ -509,7 +503,7 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
         updateRoomUrl(state.roomSlug || '');
         updateRoomDisplay();
         if (inviteRoomBtn) {
-            inviteRoomBtn.disabled = state.membershipRole !== 'owner';
+            inviteRoomBtn.disabled = false;
         }
         import('../ui/main.js').then(({ transportToggleBtn }) => {
             transportToggleBtn.disabled = false;
