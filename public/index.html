@@ -1438,6 +1438,104 @@
           padding: 8px 6px;
         }
       }
+
+      .app-footer {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        padding: 0 24px;
+        height: 32px;
+        color: rgba(255, 255, 255, 0.35);
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.45);
+        backdrop-filter: blur(6px);
+        font-size: 0.72rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        z-index: 900;
+      }
+
+      .app-footer-links {
+        display: flex;
+        width: 100%;
+        justify-content: flex-end;
+        gap: 14px;
+      }
+
+      .app-footer-link {
+        color: rgba(255, 255, 255, 0.35);
+        text-decoration: none;
+        transition: color 140ms ease, transform 140ms ease;
+        padding: 0 2px;
+      }
+
+      .app-footer-link:hover,
+      .app-footer-link:focus-visible {
+        color: rgba(255, 255, 255, 0.7);
+        outline: none;
+        transform: translateY(-1px);
+      }
+
+      .about-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(2, 6, 23, 0.65);
+        backdrop-filter: blur(6px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1300;
+      }
+
+      .about-modal-card {
+        width: min(360px, 92vw);
+        border-radius: 18px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: rgba(15, 23, 42, 0.92);
+        padding: 22px;
+        box-shadow: 0 24px 48px rgba(2, 6, 23, 0.65);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .about-modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .about-modal-close {
+        appearance: none;
+        border: none;
+        background: rgba(148, 163, 184, 0.18);
+        border-radius: 999px;
+        color: rgba(248, 250, 252, 0.8);
+        padding: 4px 12px;
+        font-size: 0.75rem;
+        letter-spacing: 0.12em;
+        cursor: pointer;
+        transition: background 140ms ease, transform 140ms ease;
+      }
+
+      .about-modal-close:hover {
+        background: rgba(148, 163, 184, 0.3);
+        transform: translateY(-1px);
+      }
+
+      .about-modal p {
+        margin: 0;
+        color: rgba(226, 232, 240, 0.9);
+        line-height: 1.5;
+        font-size: 0.9rem;
+      }
     </style>
   </head>
   <body>
@@ -1542,6 +1640,13 @@
       </section>
     </main>
 
+    <footer class="app-footer" role="contentinfo">
+      <nav class="app-footer-links">
+        <a id="footer-about-link" class="app-footer-link" href="#about">About</a>
+        <a class="app-footer-link" href="https://github.com/batorr/seqroom" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </nav>
+    </footer>
+
     <div id="invite-modal" class="hidden">
       <div class="modal-backdrop">
         <div class="modal-panel">
@@ -1584,6 +1689,16 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="about-modal" class="about-modal hidden" role="dialog" aria-modal="true" aria-labelledby="about-modal-title">
+      <div class="about-modal-card">
+        <div class="about-modal-header">
+          <h3 id="about-modal-title">About seqroom</h3>
+          <button id="close-about-modal" class="about-modal-close" type="button">Close</button>
+        </div>
+        <p>seqroom is an experimental collaborative step‑sequencer built with Node.js, Express, and a modular browser‑based audio engine. Its goal is to explore real‑time, low‑latency music creation directly in the browser.<br><br>With thanks to Gergely Vincze for his many valuable ideas and feedback during development.💙</p>
       </div>
     </div>
 

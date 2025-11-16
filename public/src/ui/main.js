@@ -32,6 +32,9 @@ export const inviteModal = document.getElementById('invite-modal');
 export const closeInviteModalBtn = document.getElementById('close-invite-modal');
 export const inviteLinkInput = document.getElementById('invite-link-input');
 export const copyInviteLinkBtn = document.getElementById('copy-invite-link');
+export const aboutModal = document.getElementById('about-modal');
+export const closeAboutModalBtn = document.getElementById('close-about-modal');
+export const footerAboutLink = document.getElementById('footer-about-link');
 
 initializeSidebar();
 renderInstrumentSidebar();
@@ -275,6 +278,42 @@ export function setupInviteModal() {
             });
         });
     }
+}
+
+export function setupAboutModal() {
+    if (!aboutModal || !footerAboutLink) {
+        return;
+    }
+
+    const openModal = (event) => {
+        event.preventDefault();
+        aboutModal.classList.remove('hidden');
+    };
+
+    const closeModal = () => {
+        aboutModal.classList.add('hidden');
+    };
+
+    footerAboutLink.addEventListener('click', openModal);
+
+    if (closeAboutModalBtn) {
+        closeAboutModalBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            closeModal();
+        });
+    }
+
+    aboutModal.addEventListener('click', (event) => {
+        if (event.target === aboutModal) {
+            closeModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !aboutModal.classList.contains('hidden')) {
+            closeModal();
+        }
+    });
 }
 
 export function showInviteLink(link) {

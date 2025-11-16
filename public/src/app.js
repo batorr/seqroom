@@ -15,7 +15,8 @@ import {
     recordToggleBtn,
     addSynthBtn,
     showLanding,
-    setupInviteModal
+    setupInviteModal,
+    setupAboutModal
 } from './ui/main.js';
 
 // Import tempo controls
@@ -34,6 +35,7 @@ export function initialize() {
     setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn);
     setupSynthModal(socket);
     setupInviteModal();
+    setupAboutModal();
     setupDisplayNameControls();
     primeAudioUnlock();
 
