@@ -155,7 +155,7 @@ async function ensureRecordingWorklet(ctx) {
     if (!ctx.audioWorklet) {
         throw new Error('AudioWorklet not available on this AudioContext.');
     }
-    await ctx.audioWorklet.addModule('recording-processor.js');
+    await ctx.audioWorklet.addModule('/recording-processor.js');
     audioState.recordingModuleLoaded = true;
 }
 
