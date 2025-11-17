@@ -274,8 +274,81 @@ function resolveInstrumentId({ instrumentId, synthName }) {
 
 // Setup room control event listeners
 export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
-    createRoomBtn.addEventListener('click', () => {
-        const suggestedName = state.roomSlug || state.roomId || '';
+    const createRoomModal = document.getElementById('create-room-modal');
+    const createRoomForm = document.getElementById('create-room-form');
+    const createRoomInput = document.getElementById('create-room-input');
+    const createRoomError = document.getElementById('create-room-error');
+    const cancelCreateRoomBtn = document.getElementById('cancel-create-room');
+    const dismissCreateRoomBtn = document.getElementById('dismiss-create-room');
+    const confirmCreateRoomBtn = document.getElementById('confirm-create-room');
+    const modalBackdrop = createRoomModal?.querySelector('.modal-backdrop') || null;
+    const roomNamePattern = /^[A-Za-z0-9]+$/;
+
+    const escapeHtml = (value = '') => value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const showInvalidCharacters = (chars) => {
+        if (!createRoomError) {
+            return;
+        }
+        if (!chars.length) {
+            createRoomError.textContent = '';
+            createRoomError.classList.add('hidden');
+            return;
+        }
+        const chips = chars.map((char) => `<span class="invalid-char">${escapeHtml(char)}</span>`).join('');
+        createRoomError.innerHTML = `Only English letters and numbers are allowed. Invalid: ${chips}`;
+        createRoomError.classList.remove('hidden');
+    };
+
+    const updateCreateRoomValidation = () => {
+        if (!createRoomInput || !confirmCreateRoomBtn) {
+            return false;
+        }
+        const trimmed = createRoomInput.value.trim();
+        const invalidMatches = trimmed.match(/[^A-Za-z0-9]/g) || [];
+        const uniqueInvalid = Array.from(new Set(invalidMatches));
+        const isValid = Boolean(trimmed) && uniqueInvalid.length === 0;
+        confirmCreateRoomBtn.disabled = !isValid;
+        showInvalidCharacters(uniqueInvalid);
+        return isValid;
+    };
+
+    const closeCreateRoomModal = () => {
+        if (!createRoomModal) {
+            return;
+        }
+        createRoomModal.classList.add('hidden');
+        if (createRoomForm) {
+            createRoomForm.reset();
+        }
+        showInvalidCharacters([]);
+        if (confirmCreateRoomBtn) {
+            confirmCreateRoomBtn.disabled = true;
+        }
+    };
+
+    const openCreateRoomModal = () => {
+        if (!createRoomModal || !createRoomForm || !createRoomInput || !confirmCreateRoomBtn) {
+            fallbackCreateRoomPrompt();
+            return;
+        }
+        const suggestion = sanitizeRoomName(state.roomSlug || state.roomId || '');
+        createRoomInput.value = suggestion;
+        createRoomModal.classList.remove('hidden');
+        updateCreateRoomValidation();
+        window.setTimeout(() => {
+            createRoomInput.focus();
+            createRoomInput.select();
+        }, 0);
+    };
+
+    const fallbackCreateRoomPrompt = () => {
+        const suggestedName = sanitizeRoomName(state.roomSlug || state.roomId || '');
         const input = window.prompt('Name your room:', suggestedName);
         if (input === null) {
             return;
@@ -285,7 +358,65 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             window.alert('Room name cannot be empty.');
             return;
         }
+        if (!roomNamePattern.test(desiredName)) {
+            window.alert('Use only letters or numbers for room names.');
+            return;
+        }
         connectToRoom({ mode: 'create', roomName: desiredName });
+    };
+
+    const handleCreateSubmit = (event) => {
+        event.preventDefault();
+        if (!createRoomInput) {
+            return;
+        }
+        const desiredName = createRoomInput.value.trim();
+        if (!roomNamePattern.test(desiredName)) {
+            updateCreateRoomValidation();
+            return;
+        }
+        closeCreateRoomModal();
+        connectToRoom({ mode: 'create', roomName: desiredName });
+    };
+
+    if (createRoomBtn) {
+        createRoomBtn.addEventListener('click', openCreateRoomModal);
+    }
+
+    if (createRoomForm) {
+        createRoomForm.addEventListener('submit', handleCreateSubmit);
+    }
+
+    if (createRoomInput) {
+        createRoomInput.addEventListener('input', updateCreateRoomValidation);
+    }
+
+    if (cancelCreateRoomBtn) {
+        cancelCreateRoomBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            closeCreateRoomModal();
+        });
+    }
+
+    if (dismissCreateRoomBtn) {
+        dismissCreateRoomBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            closeCreateRoomModal();
+        });
+    }
+
+    if (createRoomModal) {
+        createRoomModal.addEventListener('click', (event) => {
+            if (event.target === createRoomModal || event.target === modalBackdrop) {
+                closeCreateRoomModal();
+            }
+        });
+    }
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && createRoomModal && !createRoomModal.classList.contains('hidden')) {
+            closeCreateRoomModal();
+        }
     });
 
     joinRoomBtn.addEventListener('click', () => {
@@ -310,6 +441,10 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             requestInviteToken();
         });
     }
+}
+
+function sanitizeRoomName(value = '') {
+    return value.replace(/[^A-Za-z0-9]/g, '');
 }
 
 function requestInviteToken() {

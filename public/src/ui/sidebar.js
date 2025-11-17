@@ -30,6 +30,12 @@ function getTypeLabel(instrument) {
     return 'Synth';
 }
 
+function getTypeDescription(instrument) {
+    const typeLabel = getTypeLabel(instrument);
+    const creatorName = instrument?.creatorDisplayName;
+    return creatorName ? `${typeLabel} by ${creatorName}` : typeLabel;
+}
+
 function updateSidebarCount() {
     if (!sidebarCountEl) {
         return;
@@ -128,7 +134,7 @@ function createSidebarItem(instrument) {
 
     const typeEl = document.createElement('span');
     typeEl.className = 'instrument-sidebar-type';
-    typeEl.textContent = getTypeLabel(instrument);
+    typeEl.textContent = getTypeDescription(instrument);
 
     button.appendChild(nameEl);
     button.appendChild(typeEl);
@@ -203,7 +209,7 @@ export function updateSidebarEntry(instrumentId) {
         return;
     }
     ref.nameEl.textContent = instrument.name || getTypeLabel(instrument);
-    ref.typeEl.textContent = getTypeLabel(instrument);
+    ref.typeEl.textContent = getTypeDescription(instrument);
 }
 
 export function removeInstrumentSidebarEntry(instrumentId) {

@@ -199,6 +199,69 @@
         text-align: left;
       }
 
+      .modal-form-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .modal-form {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .modal-form-field label {
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(226, 232, 240, 0.85);
+      }
+
+      .modal-text-input {
+        width: 100%;
+        padding: 12px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.7);
+        color: #f8fafc;
+        font-size: 1rem;
+        font-weight: 600;
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+      }
+
+      .modal-text-input:focus {
+        outline: none;
+        border-color: rgba(56, 189, 248, 0.8);
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+      }
+
+      .input-error {
+        margin: 0;
+        font-size: 0.85rem;
+        color: #f87171;
+        min-height: 18px;
+      }
+
+      .input-error .invalid-char {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        padding: 0 4px;
+        border-radius: 8px;
+        background: rgba(248, 113, 113, 0.2);
+        border: 1px solid rgba(248, 113, 113, 0.4);
+        font-weight: 600;
+        margin-left: 6px;
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+      }
+
       .hidden {
         display: none !important;
       }
@@ -1663,6 +1726,37 @@
       </div>
     </div>
 
+    <div id="create-room-modal" class="hidden">
+      <div class="modal-backdrop">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h3>Name Your Room</h3>
+            <button id="cancel-create-room" class="subtle" type="button">Close</button>
+          </div>
+          <p class="modal-hint">Use English letters and numbers only. This helps guests find your session.</p>
+          <form id="create-room-form" class="modal-form" autocomplete="off">
+            <div class="modal-form-field">
+              <label for="create-room-input">Room name</label>
+              <input
+                id="create-room-input"
+                class="modal-text-input"
+                type="text"
+                maxlength="32"
+                placeholder="MyRoom123"
+                inputmode="text"
+                required
+              />
+              <p id="create-room-error" class="input-error hidden"></p>
+            </div>
+            <div class="modal-actions">
+              <button id="dismiss-create-room" class="subtle" type="button">Cancel</button>
+              <button id="confirm-create-room" class="primary" type="submit" disabled>Create Room</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
     <div id="add-synth-modal" class="hidden">
       <div class="modal-backdrop">
         <div class="modal-panel">
@@ -1698,7 +1792,7 @@
           <h3 id="about-modal-title">About seqroom</h3>
           <button id="close-about-modal" class="about-modal-close" type="button">Close</button>
         </div>
-        <p>seqroom is an experimental collaborative step‑sequencer built with Node.js, Express, and a modular browser‑based audio engine. Its goal is to explore real‑time, low‑latency music creation directly in the browser.<br><br>With thanks to Gergely Vincze for his many valuable ideas and feedback during development.💙</p>
+        <p>seqroom is an experimental collaborative step‑sequencer built with Node.js, Express, and a modular browser‑based audio engine. Its goal is to explore real‑time, low‑latency music creation directly in the browser.<br><br>With thanks to Gergely Vincze for his many valuable ideas and feedback during development, and Péter Hermann for his help refactoring the project.💙</p>
       </div>
     </div>
 
