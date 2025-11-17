@@ -1733,7 +1733,7 @@
             <h3>Name Your Room</h3>
             <button id="cancel-create-room" class="subtle" type="button">Close</button>
           </div>
-          <p class="modal-hint">Use English letters and numbers only. This helps guests find your session.</p>
+          <p class="modal-hint">Use English letters, numbers, spaces, or hyphens only. This helps guests find your session.</p>
           <form id="create-room-form" class="modal-form" autocomplete="off">
             <div class="modal-form-field">
               <label for="create-room-input">Room name</label>
@@ -1751,6 +1751,37 @@
             <div class="modal-actions">
               <button id="dismiss-create-room" class="subtle" type="button">Cancel</button>
               <button id="confirm-create-room" class="primary" type="submit" disabled>Create Room</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="display-name-modal" class="hidden">
+      <div class="modal-backdrop">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h3>Set Your Name</h3>
+            <button id="close-display-name-modal" class="subtle" type="button">Close</button>
+          </div>
+          <p id="display-name-modal-message" class="modal-hint">Choose a display name so others recognize you.</p>
+          <form id="display-name-modal-form" class="modal-form" autocomplete="off">
+            <div class="modal-form-field">
+              <label for="display-name-modal-input">Display name</label>
+              <input
+                id="display-name-modal-input"
+                class="modal-text-input"
+                type="text"
+                maxlength="32"
+                placeholder="Guest"
+                inputmode="text"
+                required
+              />
+              <p id="display-name-modal-error" class="input-error hidden"></p>
+            </div>
+            <div class="modal-actions">
+              <button id="cancel-display-name-modal" class="subtle" type="button">Cancel</button>
+              <button id="confirm-display-name-modal" class="primary" type="submit">Continue</button>
             </div>
           </form>
         </div>

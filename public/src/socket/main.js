@@ -6,7 +6,9 @@ import {
     hydrateState,
     normalizeInstrument,
     setInstrumentLockedBy,
-    getDisplayNameOrDefault
+    getDisplayNameOrDefault,
+    setDisplayName,
+    DEFAULT_DISPLAY_NAME
 } from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
@@ -22,6 +24,7 @@ import {
     inviteRoomBtn,
     showInviteLink,
 } from '../ui/main.js';
+import { requestDisplayNameModal } from '../ui/display-name.js';
 import { renderInstrument, removeInstrumentCard, renderEmptyState, setActiveInstrument, updateActiveInstrumentHighlight } from '../ui/instrument-card.js';
 import { updateTempoDisplay } from '../ui/tempo-controls.js';
 import { syncAudioScheduler, stopAudioScheduler } from '../audio/scheduler.js';
@@ -282,7 +285,7 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
     const dismissCreateRoomBtn = document.getElementById('dismiss-create-room');
     const confirmCreateRoomBtn = document.getElementById('confirm-create-room');
     const modalBackdrop = createRoomModal?.querySelector('.modal-backdrop') || null;
-    const roomNamePattern = /^[A-Za-z0-9]+$/;
+    const roomNamePattern = /^[A-Za-z0-9 -]+$/;
 
     const escapeHtml = (value = '') => value
         .replace(/&/g, '&amp;')
@@ -301,7 +304,7 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             return;
         }
         const chips = chars.map((char) => `<span class="invalid-char">${escapeHtml(char)}</span>`).join('');
-        createRoomError.innerHTML = `Only English letters and numbers are allowed. Invalid: ${chips}`;
+        createRoomError.innerHTML = `Only English letters, numbers, spaces, or hyphens are allowed. Invalid: ${chips}`;
         createRoomError.classList.remove('hidden');
     };
 
@@ -310,7 +313,7 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             return false;
         }
         const trimmed = createRoomInput.value.trim();
-        const invalidMatches = trimmed.match(/[^A-Za-z0-9]/g) || [];
+        const invalidMatches = trimmed.match(/[^A-Za-z0-9 -]/g) || [];
         const uniqueInvalid = Array.from(new Set(invalidMatches));
         const isValid = Boolean(trimmed) && uniqueInvalid.length === 0;
         confirmCreateRoomBtn.disabled = !isValid;
@@ -359,7 +362,7 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             return;
         }
         if (!roomNamePattern.test(desiredName)) {
-            window.alert('Use only letters or numbers for room names.');
+            window.alert('Use only letters, numbers, spaces, or hyphens for room names.');
             return;
         }
         connectToRoom({ mode: 'create', roomName: desiredName });
@@ -444,7 +447,7 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
 }
 
 function sanitizeRoomName(value = '') {
-    return value.replace(/[^A-Za-z0-9]/g, '');
+    return value.replace(/[^A-Za-z0-9 -]/g, '');
 }
 
 function requestInviteToken() {
@@ -647,12 +650,38 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
     });
 }
 
-export function attemptAutoJoinFromInvite() {
+async function ensureDisplayNameBeforeInviteJoin(slug) {
+    const currentDisplayName = getDisplayNameOrDefault();
+    if (typeof window === 'undefined') {
+        return currentDisplayName;
+    }
+    if (currentDisplayName && currentDisplayName !== DEFAULT_DISPLAY_NAME) {
+        return currentDisplayName;
+    }
+    if (typeof requestDisplayNameModal === 'function') {
+        return requestDisplayNameModal({ slug });
+    }
+    const promptLabel = slug
+        ? `Enter your name to join ${slug}:`
+        : 'Enter your name to join this room:';
+    const response = window.prompt(promptLabel, currentDisplayName || DEFAULT_DISPLAY_NAME);
+    if (response === null) {
+        return null;
+    }
+    setDisplayName(response);
+    return getDisplayNameOrDefault();
+}
+
+export async function attemptAutoJoinFromInvite() {
     if (inviteLinkAutoJoinAttempted) {
         return;
     }
     const details = getInviteDetailsFromLocation();
     if (!details) {
+        return;
+    }
+    const displayNameReady = await ensureDisplayNameBeforeInviteJoin(details.slug);
+    if (!displayNameReady) {
         return;
     }
     inviteLinkAutoJoinAttempted = true;
