@@ -93,6 +93,7 @@ export function setupSocketEvents() {
             }
         }
         socketState.pendingDefaultInstrumentLabel = null;
+        state.instruments.forEach((instrument) => prepareSamplerAudio(instrument));
         renderTransport();
         renderInstruments();
         updateConnectionsDisplay(payload.connections ?? 0);
