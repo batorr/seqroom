@@ -312,6 +312,7 @@ function createInstrument(type, options = {}) {
     name: sanitizeInstrumentName(options.name, type),
     createdAt: Date.now(),
     lockedBy: null,
+    muted: false,
     params: createDefaultParams(type),
     stepCount: initialStepCount,
     steps: createStepSequence(type, initialStepCount),
@@ -417,6 +418,7 @@ function cloneInstrument(instrument) {
     name: instrument.name,
     createdAt: instrument.createdAt,
     lockedBy: normalizedLockOwner,
+    muted: Boolean(instrument.muted),
     params: instrument.params,
     stepCount: normalizedStepCount,
     creatorUserId: normalizedCreatorUserId,
@@ -1402,6 +1404,16 @@ io.on('connection', (socket) => {
     }
 
     applyInstrumentParams(instrument, params);
+    broadcastInstrumentState(room.id, instrumentId);
+  });
+
+  socket.on('instrument:mute', async ({ instrumentId, muted } = {}) => {
+    if (!await checkRateLimit(rateLimiters.instrumentParam, socket.id, socket)) return;
+    const room = getRoomForSocket(socket);
+    if (!room || typeof instrumentId !== 'string') return;
+    const instrument = room.instruments.get(instrumentId);
+    if (!instrument) return;
+    instrument.muted = Boolean(muted);
     broadcastInstrumentState(room.id, instrumentId);
   });
 

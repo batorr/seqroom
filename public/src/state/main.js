@@ -245,6 +245,7 @@ export function normalizeInstrument(instrument) {
         name: normalizedName,
         createdAt: instrument.createdAt,
         lockedBy: normalizedLockOwner,
+        muted: Boolean(instrument.muted),
         params: normalizedParams,
         stepCount: normalizedStepCount,
         steps: normalizedSteps,

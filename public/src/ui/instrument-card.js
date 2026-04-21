@@ -1077,6 +1077,9 @@ export function ensureInstrumentCard(instrument) {
         muteButton.classList.toggle('is-muted', next);
         muteButton.setAttribute('aria-pressed', String(next));
         node.classList.toggle('is-muted', next);
+        if (socket) {
+            socket.emit('instrument:mute', { instrumentId: instrument.id, muted: next });
+        }
     });
 
     const nameGroup = node.querySelector('.synth-name-group');
@@ -1223,6 +1226,19 @@ export function ensureInstrumentCard(instrument) {
 
     updateInstrumentCard(node, instrument);
     return node;
+}
+
+function syncInstrumentMuteState(entry, instrument) {
+    if (!entry || !instrument) return;
+    const muted = Boolean(instrument.muted);
+    setInstrumentMuted(instrument.id, muted);
+    if (entry.muteButton) {
+        entry.muteButton.classList.toggle('is-muted', muted);
+        entry.muteButton.setAttribute('aria-pressed', String(muted));
+    }
+    if (entry.root) {
+        entry.root.classList.toggle('is-muted', muted);
+    }
 }
 
 function updateInstrumentLockState(entry, instrument) {
@@ -1398,6 +1414,7 @@ export function updateInstrumentCard(card, instrument) {
     renderStepGrid(stepGrid, instrument);
 
     updateInstrumentLockState(entry, instrument);
+    syncInstrumentMuteState(entry, instrument);
 }
 
 export function removeInstrumentCard(instrumentId) {
@@ -1405,6 +1422,7 @@ export function removeInstrumentCard(instrumentId) {
         closePitchPopup({ commit: false });
     }
     removeCollapsedState(instrumentId);
+    audioState.mutedInstruments.delete(instrumentId);
     const entry = socketState.instrumentElements.get(instrumentId);
     if (!entry) {
         return;
