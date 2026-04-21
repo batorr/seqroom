@@ -4,6 +4,7 @@ const express = require('express');
 const http = require('http');
 const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
 const { Server } = require('socket.io');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 const PORT = process.env.PORT || 3000;
 const STEP_COUNT = 16;
@@ -1053,9 +1054,34 @@ app.get('/r/:slug', (_req, res) => {
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Rate limiters: points = max calls, duration = time window in seconds
+const rateLimiters = {
+  roomCreate:      new RateLimiterMemory({ points: 5,   duration: 60 }),  // 5 szoba/perc/IP
+  joinWithInvite:  new RateLimiterMemory({ points: 10,  duration: 60 }),  // 10 csatlakozás/perc/IP
+  instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),  // 10 hangszer/perc/socket
+  instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 paraméter/perc/socket (knob forgás)
+  instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 lépés/perc/socket
+  tempoSet:        new RateLimiterMemory({ points: 30,  duration: 60 }),  // 30 tempóváltás/perc/socket
+};
+
+async function checkRateLimit(limiter, key, socket, callback) {
+  try {
+    await limiter.consume(key);
+    return true;
+  } catch {
+    if (typeof callback === 'function') {
+      callback({ ok: false, error: 'rate-limited' });
+    } else {
+      socket.emit('error', { error: 'rate-limited' });
+    }
+    return false;
+  }
+}
+
 io.on('connection', (socket) => {
   socket.on('room:create', async ({ roomName, displayName } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
+    if (!await checkRateLimit(rateLimiters.roomCreate, socket.handshake.address, socket, respond)) return;
     const sanitizedName = sanitizeRoomName(roomName);
     if (!sanitizedName) {
       respond({ ok: false, error: 'invalid-room-name' });
@@ -1081,6 +1107,7 @@ io.on('connection', (socket) => {
 
   socket.on('joinWithInvite', async ({ token } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
+    if (!await checkRateLimit(rateLimiters.joinWithInvite, socket.handshake.address, socket, respond)) return;
     const validation = validateInviteToken(token);
     if (!validation.ok) {
       respond({ ok: false, error: validation.error });
@@ -1173,7 +1200,8 @@ io.on('connection', (socket) => {
     broadcastTransportState(roomId);
   });
 
-  socket.on('transport:set-tempo', ({ bpm } = {}) => {
+  socket.on('transport:set-tempo', async ({ bpm } = {}) => {
+    if (!await checkRateLimit(rateLimiters.tempoSet, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1245,8 +1273,9 @@ io.on('connection', (socket) => {
     respond({ ok: true, stepCount: instrument.stepCount });
   });
 
-  socket.on('instrument:add', ({ type, name, creatorDisplayName, creatorUserId } = {}, callback) => {
+  socket.on('instrument:add', async ({ type, name, creatorDisplayName, creatorUserId } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
+    if (!await checkRateLimit(rateLimiters.instrumentAdd, socket.id, socket, respond)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
       respond({ ok: false, error: 'not-in-room' });
@@ -1304,7 +1333,8 @@ io.on('connection', (socket) => {
     respond({ ok: true });
   });
 
-  socket.on('instrument:param', ({ instrumentId, params } = {}) => {
+  socket.on('instrument:param', async ({ instrumentId, params } = {}) => {
+    if (!await checkRateLimit(rateLimiters.instrumentParam, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1363,7 +1393,8 @@ io.on('connection', (socket) => {
     respond({ ok: true, name: sanitizedName });
   });
 
-  socket.on('instrument:step', ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
+  socket.on('instrument:step', async ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
+    if (!await checkRateLimit(rateLimiters.instrumentStep, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
