@@ -35,7 +35,7 @@ export function ensureAudioContext() {
             if (instrument.type === SynthTypes.SAMPLER) {
                 import('./instruments/sampler.js').then(({ prepareSamplerAudio }) => {
                     prepareSamplerAudio(instrument);
-                });
+                }).catch(console.error);
             }
         });
 
@@ -71,5 +71,5 @@ export function applyClockCorrection(offsetSample, latencySample) {
 
     import('../ui/main.js').then(({ updateSyncStatus }) => {
         updateSyncStatus();
-    });
+    }).catch(console.error);
 }

@@ -604,7 +604,7 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
 let socket = null;
 import('../socket/main.js').then((module) => {
     socket = module.socket;
-});
+}).catch(console.error);
 
 function getCurrentSocketId() {
     return socket && typeof socket.id === 'string' ? socket.id : null;
@@ -646,7 +646,7 @@ export function renderInstrument(instrumentId) {
 
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
-    });
+    }).catch(console.error);
 }
 
 export function setActiveInstrument(instrumentId, options = {}) {
@@ -725,7 +725,7 @@ function updateStepControlDisplay(entry, stepCount) {
 function refreshPlaybackIndicatorsView() {
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
-    });
+    }).catch(console.error);
 }
 
 function refreshInstrumentStepUI(instrumentId) {
@@ -1389,7 +1389,7 @@ export function removeInstrumentCard(instrumentId) {
     removeInstrumentSidebarEntry(instrumentId);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
-    });
+    }).catch(console.error);
 }
 
 export function renderEmptyState() {
@@ -1449,7 +1449,7 @@ function renderDrumSelector(entry, instrument) {
             updateInstrumentLockState(entry, instrument);
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
                 updatePlaybackIndicators(getCurrentStepIndex());
-            });
+            }).catch(console.error);
         });
 
         container.appendChild(button);
@@ -1495,7 +1495,7 @@ function renderSamplerSelector(entry, instrument, definition) {
             updateInstrumentLockState(entry, instrument);
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
                 updatePlaybackIndicators(getCurrentStepIndex());
-            });
+            }).catch(console.error);
         });
 
         const infoLabel = document.createElement('span');
@@ -1803,7 +1803,7 @@ export function handleSamplerFileUpload(instrumentId, slotId, file) {
         if (instrument) {
             import('../audio/instruments/sampler.js').then(({ prepareSamplerAudio }) => {
                 prepareSamplerAudio(instrument);
-            });
+            }).catch(console.error);
             renderInstrument(instrumentId);
         }
         emitSamplerParamUpdate(instrumentId, slotId, { sample: sampleMeta });
@@ -1820,7 +1820,7 @@ export function handleSamplerSampleClear(instrumentId, slotId) {
         const key = samplerSlotKey(instrumentId, slotId);
         audioState.samplerBuffers.delete(key);
         audioState.pendingSamplerLoads.delete(key);
-    });
+    }).catch(console.error);
     renderInstrument(instrumentId);
     emitSamplerParamUpdate(instrumentId, slotId, { sample: null });
 }

@@ -83,7 +83,7 @@ export function closeSynthModal() {
 export function renderTransport() {
     import('./tempo-controls.js').then(({ updateTempoDisplay }) => {
         updateTempoDisplay(state.transport.bpm);
-    });
+    }).catch(console.error);
 
     transportToggleBtn.textContent = state.transport.playing ? 'Stop' : 'Play';
     transportToggleBtn.classList.toggle('playing', state.transport.playing);
@@ -96,19 +96,19 @@ export function renderTransport() {
     import('../audio/recording.js').then(({ updateRecordButton }) => {
         import('../state/audio.js').then(({ audioState }) => {
             updateRecordButton(audioState.isRecording);
-        });
-    });
+        }).catch(console.error);
+    }).catch(console.error);
 
     if (state.transport.playing) {
         import('./instrument-card.js').then(({ updatePlaybackIndicators }) => {
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
                 updatePlaybackIndicators(getCurrentStepIndex());
-            });
-        });
+            }).catch(console.error);
+        }).catch(console.error);
     } else {
         import('./instrument-card.js').then(({ updatePlaybackIndicators }) => {
             updatePlaybackIndicators(-1);
-        });
+        }).catch(console.error);
     }
 }
 
@@ -154,8 +154,8 @@ export function renderInstruments() {
 
         import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
             updatePlaybackIndicators(getCurrentStepIndex());
-        });
-    });
+        }).catch(console.error);
+    }).catch(console.error);
 }
 
 // Connection and sync status
@@ -365,7 +365,7 @@ export function primeAudioUnlock() {
         document.addEventListener(eventName, () => {
             import('../audio/main.js').then(({ ensureAudioContext }) => {
                 ensureAudioContext();
-            });
+            }).catch(console.error);
         }, {
             once: true,
             passive: true,

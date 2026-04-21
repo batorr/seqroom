@@ -28,7 +28,7 @@ export function commitTempo(bpm, socket) {
     // Sync audio scheduler
     import('../audio/scheduler.js').then(({ syncAudioScheduler }) => {
         syncAudioScheduler();
-    });
+    }).catch(console.error);
 }
 
 // Setup tempo controls event listeners

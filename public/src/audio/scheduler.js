@@ -68,7 +68,7 @@ export function syncAudioScheduler() {
 
     import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
         updatePlaybackIndicators(currentStep);
-    });
+    }).catch(console.error);
 
     if (!audioState.schedulerId) {
         audioState.schedulerId = setInterval(runAudioScheduler, AUDIO_LOOKAHEAD_MS);
@@ -87,7 +87,7 @@ export function stopAudioScheduler() {
     audioState.lastStepDurationMs = null;
     import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
         updatePlaybackIndicators(-1);
-    });
+    }).catch(console.error);
 }
 
 // Run audio scheduler loop
@@ -109,7 +109,7 @@ export function runAudioScheduler() {
     const serverNow = getServerSyncedTime();
     import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
-    });
+    }).catch(console.error);
 
     const scheduleUntil = serverNow + AUDIO_SCHEDULE_AHEAD_SECONDS * 1000;
     const clientNow = getClientAbsoluteTime();

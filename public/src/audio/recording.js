@@ -265,7 +265,7 @@ export function updateRecordButton(isRecording) {
         if (typeof recordToggleBtn.disabled === 'boolean') {
             recordToggleBtn.disabled = !isRecordingSupported();
         }
-    });
+    }).catch(console.error);
 }
 
 // Format duration as MM:SS

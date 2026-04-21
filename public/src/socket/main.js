@@ -546,7 +546,7 @@ export function setupTransportControls(transportToggleBtn, addSynthBtn) {
 
         import('../ui/main.js').then(({ openSynthModal }) => {
             openSynthModal();
-        });
+        }).catch(console.error);
     });
 }
 
@@ -571,13 +571,13 @@ export function setupRecordingControls(recordToggleBtn) {
                 import('../state/audio.js').then(({ audioState }) => {
                     audioState.isRecording = false;
                     updateRecordButton(false);
-                });
+                }).catch(console.error);
                 window.alert('Unable to control recording. Check the console for details.');
             });
         });
 
         updateRecordButton(false);
-    });
+    }).catch(console.error);
 }
 
 // Connect to a room
@@ -651,7 +651,7 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
         }
         import('../ui/main.js').then(({ transportToggleBtn }) => {
             transportToggleBtn.disabled = false;
-        });
+        }).catch(console.error);
         updateTempoDisplay(state.transport.bpm);
     });
 }
