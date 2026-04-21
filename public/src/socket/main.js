@@ -303,8 +303,14 @@ export function setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn) {
             createRoomError.classList.add('hidden');
             return;
         }
-        const chips = chars.map((char) => `<span class="invalid-char">${escapeHtml(char)}</span>`).join('');
-        createRoomError.innerHTML = `Only English letters, numbers, spaces, or hyphens are allowed. Invalid: ${chips}`;
+        createRoomError.textContent = '';
+        createRoomError.appendChild(document.createTextNode('Only English letters, numbers, spaces, or hyphens are allowed. Invalid: '));
+        for (const char of chars) {
+            const chip = document.createElement('span');
+            chip.className = 'invalid-char';
+            chip.textContent = char;
+            createRoomError.appendChild(chip);
+        }
         createRoomError.classList.remove('hidden');
     };
 
