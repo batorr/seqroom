@@ -20,25 +20,26 @@ export function scheduleKick(params, when, ctx) {
     const volume = clampValue(params.kickLevel ?? 0.9, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
     const decay = clampValue(params.kickDecay ?? 0.8, 0.1, 2);
     const tone = clampValue(params.kickTone ?? 60, 30, 100);
-    const drive = clampValue(params.kickDrive ?? 0.2, 0, 1);
+    const drive = clampValue(params.kickDrive ?? 0.15, 0, 1);
 
-    const startFreq = tone + 50;        // 80–150 Hz
-    const endFreq = 30 + tone * 0.15;   // 34–45 Hz
-    const freqTime = decay * 0.275;
-    const gainTime = decay * 0.35;
+    const toneNorm = (tone - 30) / 70;
+    const startFreq = 100 + toneNorm * 120;  // 100–220 Hz
+    const endFreq = 28 + toneNorm * 20;      // 28–48 Hz (sub-bass)
+    const pitchTime = 0.025 + decay * 0.02;  // 25–65 ms — fast snap
+    const gainTime = 0.15 + decay * 0.6;     // 0.27–1.35 s
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(startFreq, when);
-    osc.frequency.exponentialRampToValueAtTime(endFreq, when + freqTime);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, when + pitchTime);
     gain.gain.setValueAtTime(0.001, when);
-    gain.gain.linearRampToValueAtTime(volume, when + 0.002);
+    gain.gain.linearRampToValueAtTime(volume, when + 0.003);
     gain.gain.exponentialRampToValueAtTime(0.0001, when + gainTime);
 
     if (drive > 0.05) {
         const shaper = ctx.createWaveShaper();
-        const amount = 1 + drive * 150;
+        const amount = 1 + drive * 60;
         const curve = new Float32Array(256);
         for (let i = 0; i < 256; i++) {
             const x = (i * 2) / 256 - 1;
@@ -54,7 +55,7 @@ export function scheduleKick(params, when, ctx) {
 
     gain.connect(audioState.masterGain);
     osc.start(when);
-    osc.stop(when + gainTime + 0.05);
+    osc.stop(when + gainTime + 0.1);
 }
 
 export function scheduleSnare(params, when, ctx) {
