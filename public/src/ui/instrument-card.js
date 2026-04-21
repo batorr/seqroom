@@ -39,7 +39,6 @@ const PITCH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 
 const PITCH_OCTAVE_MIN = 0;
 const PITCH_OCTAVE_MAX = 7;
 let activePitchPopup = null;
-let pitchPopupStylesInjected = false;
 
 const COLLAPSE_STORAGE_PREFIX = 'seqroom:collapsed:';
 
@@ -216,90 +215,6 @@ function arrayBufferToBase64(buffer) {
     return window.btoa(binary);
 }
 
-function ensurePitchPopupStyles() {
-    if (pitchPopupStylesInjected) {
-        return;
-    }
-    const style = document.createElement('style');
-    style.id = 'pitch-popup-styles';
-    style.textContent = `
-        .pitch-popup {
-            position: absolute;
-            z-index: 1200;
-            background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.88));
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            backdrop-filter: blur(12px);
-            border-radius: 18px;
-            padding: 18px 22px;
-            color: #e2e8f0;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            box-shadow: 0 28px 65px rgba(15, 23, 42, 0.5);
-            opacity: 0;
-            transform: translateY(12px) scale(0.94);
-            transition: opacity 160ms ease, transform 160ms ease;
-        }
-
-        .pitch-popup--visible {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
-
-        .pitch-popup__columns {
-            display: flex;
-            gap: 18px;
-            align-items: stretch;
-        }
-
-        .pitch-popup__column {
-            flex: 1 1 50%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border-radius: 12px;
-            padding: 14px 20px;
-            background: rgba(15, 23, 42, 0.55);
-            border: 1px solid rgba(148, 163, 184, 0.18);
-            cursor: ns-resize;
-            user-select: none;
-            transition: background 140ms ease, border 140ms ease, box-shadow 140ms ease;
-        }
-
-        .pitch-popup__column--active {
-            background: rgba(56, 189, 248, 0.22);
-            border-color: rgba(125, 211, 252, 0.55);
-            box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
-        }
-
-        .pitch-popup__value {
-            font-family: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', 'Fira Code', monospace;
-            font-size: 38px;
-            letter-spacing: 0.08em;
-            color: #f8fafc;
-        }
-
-        .pitch-popup__label {
-            margin-top: 8px;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.34em;
-            opacity: 0.72;
-        }
-
-        .pitch-popup__hint {
-            font-size: 11px;
-            text-align: center;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            opacity: 0.65;
-            pointer-events: none;
-        }
-    `;
-    document.head.appendChild(style);
-    pitchPopupStylesInjected = true;
-}
 
 function normalizeNoteIndex(index) {
     const total = PITCH_NOTE_NAMES.length;
@@ -385,7 +300,6 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
         return;
     }
     closePitchPopup({ commit: false });
-    ensurePitchPopupStyles();
 
     const initialPitch = step.pitch || selectEl?.dataset?.pitch || 'C3';
     const parsed = parsePitchValue(initialPitch);
@@ -1992,8 +1906,7 @@ export function renderParamControls(container, instrument, definition) {
 
             const valueBadge = document.createElement('span');
             valueBadge.textContent = formatParamDisplay(initialValue, paramDef);
-            valueBadge.style.fontSize = '0.75rem';
-            valueBadge.style.opacity = '0.8';
+            valueBadge.className = 'param-value';
 
             input.addEventListener('input', () => {
                 let numericValue = Number(input.value);
