@@ -1085,7 +1085,7 @@ const rateLimiters = {
   instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),  // 10 hangszer/perc/socket
   instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 paraméter/perc/socket (knob forgás)
   instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 lépés/perc/socket
-  tempoSet:        new RateLimiterMemory({ points: 30,  duration: 60 }),  // 30 tempóváltás/perc/socket
+  tempoSet:        new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 tempóváltás/perc/socket
 };
 
 async function checkRateLimit(limiter, key, socket, callback) {
