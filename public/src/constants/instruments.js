@@ -14,7 +14,8 @@ export const SynthTypes = Object.freeze({
 export const TR808_DRUMS = [
     { id: 'kick', label: 'Kick', color: '#f97316' },
     { id: 'snare', label: 'Snare', color: '#facc15' },
-    { id: 'hat', label: 'Hat', color: '#38bdf8' },
+    { id: 'hat', label: 'CHH', color: '#38bdf8' },
+    { id: 'openhat', label: 'OHH', color: '#22c55e' },
     { id: 'clap', label: 'Clap', color: '#c084fc' },
 ];
 
@@ -62,7 +63,8 @@ function createInstrumentLibrary(sliderParam, selectParam) {
                 sliderParam('volume', 'Volume', 0, 1, 0.01),
                 sliderParam('kickLevel', 'Kick', 0, 1, 0.01),
                 sliderParam('snareLevel', 'Snare', 0, 1, 0.01),
-                sliderParam('hatLevel', 'Hats', 0, 1, 0.01),
+                sliderParam('hatLevel', 'CHH', 0, 1, 0.01),
+                sliderParam('openhatLevel', 'OHH', 0, 1, 0.01),
                 sliderParam('clapLevel', 'Clap', 0, 1, 0.01),
                 sliderParam('tone', 'Tone', 0, 1, 0.01),
             ],

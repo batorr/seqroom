@@ -62,6 +62,12 @@ const TR808_PARAM_SCHEMA = {
     tone: { min: 0, max: 1 },
     tuning: { min: 0.8, max: 1.2 },
   },
+  openhat: {
+    level: { min: 0, max: 1 },
+    decay: { min: 0.1, max: 2 },
+    tone: { min: 0, max: 1 },
+    tuning: { min: 0.8, max: 1.2 },
+  },
   clap: {
     level: { min: 0, max: 1 },
     spread: { min: 0, max: 1 },
@@ -88,6 +94,10 @@ const TR808_LEGACY_PARAM_MAP = {
   hatTone: ['hat', 'tone'],
   hatTuning: ['hat', 'tuning'],
   tone: ['hat', 'tone'],
+  openhatLevel: ['openhat', 'level'],
+  openhatDecay: ['openhat', 'decay'],
+  openhatTone: ['openhat', 'tone'],
+  openhatTuning: ['openhat', 'tuning'],
   clapLevel: ['clap', 'level'],
   clapSpread: ['clap', 'spread'],
   clapReverb: ['clap', 'reverb'],
@@ -200,6 +210,12 @@ function createDefaultParams(type) {
           tone: 0.5,
           tuning: 1,
         },
+        openhat: {
+          level: 0.6,
+          decay: 0.6,
+          tone: 0.5,
+          tuning: 1,
+        },
         clap: {
           level: 0.6,
           spread: 0.4,
@@ -251,6 +267,7 @@ function createStepTemplate(type) {
         kick: false,
         snare: false,
         hat: false,
+        openhat: false,
         clap: false,
       },
     };
@@ -627,6 +644,7 @@ function ensureDrumLayers(step) {
   if (typeof step.layers.kick !== 'boolean') step.layers.kick = false;
   if (typeof step.layers.snare !== 'boolean') step.layers.snare = false;
   if (typeof step.layers.hat !== 'boolean') step.layers.hat = false;
+  if (typeof step.layers.openhat !== 'boolean') step.layers.openhat = false;
   if (typeof step.layers.clap !== 'boolean') step.layers.clap = false;
   return step.layers;
 }
@@ -763,6 +781,11 @@ function applyTR808LegacyAliases(target) {
   target.hatTone = target.hat.tone;
   target.hatTuning = target.hat.tuning;
   target.tone = target.hat.tone;
+
+  target.openhatLevel = target.openhat.level;
+  target.openhatDecay = target.openhat.decay;
+  target.openhatTone = target.openhat.tone;
+  target.openhatTuning = target.openhat.tuning;
 
   target.clapLevel = target.clap.level;
   target.clapSpread = target.clap.spread;
