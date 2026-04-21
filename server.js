@@ -1042,7 +1042,31 @@ function broadcastInstrumentOrder(roomId) {
 
 const rooms = new Map();
 const slugToRoomId = new Map();
+const roomEmptyTimers = new Map();
 let lastPingId = 0;
+
+const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
+
+function scheduleRoomCleanup(roomId) {
+  clearRoomCleanup(roomId);
+  const timer = setTimeout(() => {
+    const room = rooms.get(roomId);
+    if (room && room.members.size === 0) {
+      rooms.delete(roomId);
+      if (room.slug) slugToRoomId.delete(room.slug);
+    }
+    roomEmptyTimers.delete(roomId);
+  }, ROOM_EMPTY_TIMEOUT_MS);
+  roomEmptyTimers.set(roomId, timer);
+}
+
+function clearRoomCleanup(roomId) {
+  const existing = roomEmptyTimers.get(roomId);
+  if (existing) {
+    clearTimeout(existing);
+    roomEmptyTimers.delete(roomId);
+  }
+}
 
 const app = express();
 
@@ -1566,6 +1590,7 @@ function createRoomState({
     },
     instruments: new Map(),
     instrumentOrder: [],
+    graceUsed: false,
   };
 
   const defaultInstrument = createInstrument(SynthTypes.SIMPLE, {
@@ -1589,6 +1614,7 @@ async function joinRoom(socket, roomId, { role = 'guest' } = {}) {
   }
 
   await leaveCurrentRoom(socket);
+  clearRoomCleanup(roomId);
   await socket.join(roomId);
   socket.data.roomId = roomId;
    socket.data.roomRole = role;
@@ -1629,9 +1655,12 @@ function removeSocketFromRoom(room, socketId) {
 
   room.members.delete(socketId);
   if (room.members.size === 0) {
-    rooms.delete(room.id);
-    if (room.slug) {
-      slugToRoomId.delete(room.slug);
+    if (!room.graceUsed) {
+      room.graceUsed = true;
+      scheduleRoomCleanup(room.id);
+    } else {
+      rooms.delete(room.id);
+      if (room.slug) slugToRoomId.delete(room.slug);
     }
   }
 }
