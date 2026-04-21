@@ -1387,6 +1387,9 @@ export function removeInstrumentCard(instrumentId) {
     entry.root.remove();
     socketState.instrumentElements.delete(instrumentId);
     removeInstrumentSidebarEntry(instrumentId);
+    import('../audio/instruments/sampler.js').then(({ cleanupSamplerBuffers }) => {
+        cleanupSamplerBuffers(instrumentId);
+    }).catch(console.error);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
     }).catch(console.error);
