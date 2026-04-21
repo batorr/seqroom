@@ -33,6 +33,40 @@ export const SAMPLER_SLOT_IDS = SAMPLER_SLOT_CONFIG.map((slot) => slot.id);
 export const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
 export const SAMPLER_ALLOWED_MIME_TYPES = ['audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3'];
 
+// Per-drum parameter definitions for TR-808
+export const TR808_DRUM_PARAMS = {
+    kick: [
+        sliderParam('kickLevel', 'Level', 0, 1, 0.01),
+        sliderParam('kickDecay', 'Decay', 0.1, 2, 0.01),
+        sliderParam('kickTone', 'Tone', 30, 100, 1),
+        sliderParam('kickDrive', 'Drive', 0, 1, 0.01),
+    ],
+    snare: [
+        sliderParam('snareLevel', 'Level', 0, 1, 0.01),
+        sliderParam('snareDecay', 'Decay', 0.1, 1.5, 0.01),
+        sliderParam('snareTone', 'Tone', 0, 1, 0.01),
+        sliderParam('snareSnappy', 'Snappy', 0, 1, 0.01),
+    ],
+    hat: [
+        sliderParam('hatLevel', 'Level', 0, 1, 0.01),
+        sliderParam('hatDecay', 'Decay', 0.05, 1, 0.01),
+        sliderParam('hatTone', 'Tone', 0, 1, 0.01),
+        sliderParam('hatTuning', 'Tuning', 0.8, 1.2, 0.01),
+    ],
+    openhat: [
+        sliderParam('openhatLevel', 'Level', 0, 1, 0.01),
+        sliderParam('openhatDecay', 'Decay', 0.1, 2, 0.01),
+        sliderParam('openhatTone', 'Tone', 0, 1, 0.01),
+        sliderParam('openhatTuning', 'Tuning', 0.8, 1.2, 0.01),
+    ],
+    clap: [
+        sliderParam('clapLevel', 'Level', 0, 1, 0.01),
+        sliderParam('clapDecay', 'Decay', 0.1, 1.5, 0.01),
+        sliderParam('clapSpread', 'Spread', 0, 1, 0.01),
+        sliderParam('clapReverb', 'Reverb', 0, 1, 0.01),
+    ],
+};
+
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
 
@@ -61,12 +95,6 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             toneClass: 'tone-808',
             params: [
                 sliderParam('volume', 'Volume', 0, 1, 0.01),
-                sliderParam('kickLevel', 'Kick', 0, 1, 0.01),
-                sliderParam('snareLevel', 'Snare', 0, 1, 0.01),
-                sliderParam('hatLevel', 'CHH', 0, 1, 0.01),
-                sliderParam('openhatLevel', 'OHH', 0, 1, 0.01),
-                sliderParam('clapLevel', 'Clap', 0, 1, 0.01),
-                sliderParam('tone', 'Tone', 0, 1, 0.01),
             ],
         },
         [SynthTypes.POLY]: {

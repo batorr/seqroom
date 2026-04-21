@@ -5,7 +5,7 @@ import { state, setInstrumentStepCountLocal, ensureLocalInstrumentCapacity, norm
 import { audioState, socketState } from '../state/audio.js';
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
-import { SynthTypes, TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
+import { SynthTypes, TR808_DRUMS, TR808_DRUM_PARAMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
@@ -1448,6 +1448,7 @@ function renderDrumSelector(entry, instrument) {
             }
             entry.activeDrum = drum.id;
             renderDrumSelector(entry, instrument);
+            renderParamControls(entry.paramsContainer, instrument, INSTRUMENT_LIBRARY[instrument.type]);
             renderStepGrid(entry.stepGrid, instrument);
             updateInstrumentLockState(entry, instrument);
             import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
@@ -1914,7 +1915,15 @@ export function renderParamControls(container, instrument, definition) {
         renderSamplerParamControls(container, instrument, definition);
         return;
     }
-    (definition.params || []).forEach((paramDef) => {
+
+    let paramDefs = definition.params || [];
+    if (instrument.type === SynthTypes.TR808) {
+        const entry = socketState.instrumentElements.get(instrument.id);
+        const activeDrum = entry?.activeDrum || 'kick';
+        paramDefs = [...paramDefs, ...(TR808_DRUM_PARAMS[activeDrum] || [])];
+    }
+
+    paramDefs.forEach((paramDef) => {
         const control = document.createElement('div');
         control.className = 'param-control';
 
@@ -1956,41 +1965,7 @@ export function renderParamControls(container, instrument, definition) {
                     instrument.params = {};
                 }
 
-                if (instrument.type === SynthTypes.TR808) {
-                    if (paramDef.key === 'tone') {
-                        instrument.params.tone = numericValue;
-                        instrument.params.hatTone = numericValue;
-                        if (!instrument.params.hat || typeof instrument.params.hat !== 'object') {
-                            instrument.params.hat = {};
-                        }
-                        instrument.params.hat.tone = numericValue;
-                    } else if (paramDef.key === 'volume') {
-                        instrument.params.volume = numericValue;
-                        if (!instrument.params.master || typeof instrument.params.master !== 'object') {
-                            instrument.params.master = {};
-                        }
-                        instrument.params.master.volume = numericValue;
-                    } else if (paramDef.key === 'kickLevel' || paramDef.key === 'snareLevel' || paramDef.key === 'hatLevel' || paramDef.key === 'clapLevel') {
-                        instrument.params[paramDef.key] = numericValue;
-                        const groupMap = {
-                            kickLevel: 'kick',
-                            snareLevel: 'snare',
-                            hatLevel: 'hat',
-                            clapLevel: 'clap',
-                        };
-                        const groupKey = groupMap[paramDef.key];
-                        if (groupKey) {
-                            if (!instrument.params[groupKey] || typeof instrument.params[groupKey] !== 'object') {
-                                instrument.params[groupKey] = {};
-                            }
-                            instrument.params[groupKey].level = numericValue;
-                        }
-                    } else {
-                        instrument.params[paramDef.key] = numericValue;
-                    }
-                } else {
-                    instrument.params[paramDef.key] = numericValue;
-                }
+                instrument.params[paramDef.key] = numericValue;
 
                 updateSidebarEntry(instrument.id);
 
@@ -2035,27 +2010,14 @@ export function renderParamControls(container, instrument, definition) {
 
 export function resolveInstrumentParamValue(instrument, paramDef) {
     const params = instrument.params || {};
-    let rawValue = params[paramDef.key];
-
-    if (instrument.type === SynthTypes.TR808 && paramDef.key === 'tone') {
-        rawValue = params.hatTone ?? params.tone ?? params?.hat?.tone ?? rawValue;
-    }
-
+    const rawValue = params[paramDef.key];
     return clampValue(rawValue, paramDef.min, paramDef.max);
 }
 
 export function createInstrumentParamUpdate(instrument, paramDef, value) {
-    if (instrument.type === SynthTypes.TR808 && paramDef.key === 'tone') {
-        if (!Number.isFinite(value)) {
-            return null;
-        }
-        return { hat: { tone: value }, tone: value };
-    }
-
     if (!Number.isFinite(value)) {
         return null;
     }
-
     return { [paramDef.key]: value };
 }
 

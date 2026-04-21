@@ -32,7 +32,8 @@ export function scheduleKick(params, when, ctx) {
     osc.type = 'sine';
     osc.frequency.setValueAtTime(startFreq, when);
     osc.frequency.exponentialRampToValueAtTime(endFreq, when + freqTime);
-    gain.gain.setValueAtTime(volume, when);
+    gain.gain.setValueAtTime(0.001, when);
+    gain.gain.linearRampToValueAtTime(volume, when + 0.002);
     gain.gain.exponentialRampToValueAtTime(0.0001, when + gainTime);
 
     if (drive > 0.05) {
