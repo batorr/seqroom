@@ -163,6 +163,9 @@ export function scheduleStep(stepNumber, when) {
 
 // Schedule individual instrument step
 export function scheduleInstrumentStep(instrument, step, when) {
+    if (audioState.mutedInstruments.has(instrument.id)) {
+        return;
+    }
     const ctx = ensureAudioContext();
     if (!ctx || !audioState.masterGain) {
         return;

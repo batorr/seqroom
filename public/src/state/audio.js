@@ -21,6 +21,7 @@ export const audioState = {
     recordingModuleLoaded: false,
     samplerBuffers: new Map(),
     pendingSamplerLoads: new Map(),
+    mutedInstruments: new Set(),
 };
 
 // Socket-related state

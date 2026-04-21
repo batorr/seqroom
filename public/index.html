@@ -910,6 +910,40 @@
         color: rgba(254, 202, 202, 0.9);
       }
 
+      .instrument-mute-button {
+        appearance: none;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(148, 163, 184, 0.15);
+        color: rgba(226, 232, 240, 0.88);
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 0.62rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 120ms ease, border 120ms ease, transform 120ms ease;
+      }
+
+      .instrument-mute-button:hover {
+        background: rgba(148, 163, 184, 0.25);
+        border-color: rgba(148, 163, 184, 0.45);
+        transform: translateY(-1px);
+      }
+
+      .instrument-mute-button.is-muted {
+        background: rgba(250, 204, 21, 0.22);
+        border-color: rgba(250, 204, 21, 0.6);
+        color: rgba(254, 240, 138, 0.95);
+      }
+
+      .synth-card.is-muted {
+        opacity: 0.55;
+      }
+
+      .synth-card.is-muted .instrument-mute-button {
+        opacity: 1;
+      }
+
       .instrument-name-input {
         width: 200px;
         max-width: 100%;

@@ -3,6 +3,18 @@
 
 import { state, setInstrumentStepCountLocal, ensureLocalInstrumentCapacity, normalizeSamplerStep, updateInstrumentName, sanitizeInstrumentName } from '../state/main.js';
 import { audioState, socketState } from '../state/audio.js';
+
+export function isInstrumentMuted(instrumentId) {
+    return audioState.mutedInstruments.has(instrumentId);
+}
+
+export function setInstrumentMuted(instrumentId, muted) {
+    if (muted) {
+        audioState.mutedInstruments.add(instrumentId);
+    } else {
+        audioState.mutedInstruments.delete(instrumentId);
+    }
+}
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
 import { SynthTypes, TR808_DRUMS, TR808_DRUM_PARAMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
@@ -1052,11 +1064,28 @@ export function ensureInstrumentCard(instrument) {
         handleLockToggle(instrument.id);
     });
 
+    const muteButton = document.createElement('button');
+    muteButton.type = 'button';
+    muteButton.className = 'instrument-mute-button';
+    muteButton.textContent = 'Mute';
+    muteButton.setAttribute('aria-label', 'Mute instrument');
+    muteButton.setAttribute('aria-pressed', 'false');
+    muteButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const next = !isInstrumentMuted(instrument.id);
+        setInstrumentMuted(instrument.id, next);
+        muteButton.classList.toggle('is-muted', next);
+        muteButton.setAttribute('aria-pressed', String(next));
+        node.classList.toggle('is-muted', next);
+    });
+
     const nameGroup = node.querySelector('.synth-name-group');
     if (nameGroup) {
+        nameGroup.appendChild(muteButton);
         nameGroup.appendChild(lockButton);
     }
     cardEntry.lockButton = lockButton;
+    cardEntry.muteButton = muteButton;
 
     const instrumentId = instrument.id;
     const getCurrentStepCount = () => {
