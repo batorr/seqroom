@@ -1786,16 +1786,25 @@ void main(){
   float asp=u_res.x/u_res.y;
   vec3 p=vec3(uv.x*asp, uv.y, u_time*0.04);
 
-  float n=fbm(p*0.9);
-  float n2=fbm(p*1.8+vec3(4.1,2.3,0.));
+  float n =snoise(p*1.2);
+  float n2=snoise(p*2.3+vec3(4.1,2.3,0.));
 
-  float t=smoothstep(-0.3,0.5,n)*0.75+smoothstep(-0.2,0.6,n2)*0.25;
+  // ridge: bright at zero-crossings, dark in valleys
+  float r1=pow(1.-abs(n), 3.5);
+  float r2=pow(1.-abs(n2),3.5)*0.45;
+  float ridge=clamp(r1+r2,0.,1.);
 
-  vec3 base=vec3(0.0667,0.0667,0.0824);
-  vec3 mid =vec3(0.110, 0.114, 0.148);
-  vec3 high=vec3(0.175, 0.180, 0.230);
+  // color ramp: black -> deep purple -> purple -> lavender -> white
+  vec3 c0=vec3(0.020,0.008,0.040);
+  vec3 c1=vec3(0.100,0.030,0.170);
+  vec3 c2=vec3(0.280,0.100,0.400);
+  vec3 c3=vec3(0.620,0.520,0.780);
+  vec3 c4=vec3(0.940,0.920,0.980);
 
-  vec3 col=mix(base,mix(mid,high,smoothstep(0.45,0.85,t)),t);
+  vec3 col=mix(c0,c1,smoothstep(0.00,0.25,ridge));
+  col=mix(col,c2,smoothstep(0.22,0.50,ridge));
+  col=mix(col,c3,smoothstep(0.46,0.74,ridge));
+  col=mix(col,c4,smoothstep(0.70,0.95,ridge));
 
   // subtle radial vignette
   float vign=1.-smoothstep(0.4,1.2,length(uv-0.5)*1.5);
@@ -1834,7 +1843,7 @@ void main(){
     window.addEventListener('resize', resize);
     resize();
 
-    let live = localStorage.getItem('seqroom-bg') !== 'off';
+    let live = localStorage.getItem('seqroom-bg') === 'on';
     const toggle = document.getElementById('bg-toggle');
 
     const staticBg = [
@@ -1849,12 +1858,12 @@ void main(){
         canvas.style.display = 'block';
         document.body.style.background = '#111115';
         toggle.className = 'bg-toggle live';
-        toggle.innerHTML = '<span class="bg-toggle-dot"></span>Live';
+        toggle.innerHTML = '<span class="bg-toggle-dot"></span>Live background';
       } else {
         canvas.style.display = 'none';
         document.body.style.background = staticBg;
         toggle.className = 'bg-toggle';
-        toggle.innerHTML = '<span class="bg-toggle-dot"></span>Static';
+        toggle.innerHTML = '<span class="bg-toggle-dot"></span>Static background';
       }
     }
 
