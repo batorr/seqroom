@@ -143,7 +143,7 @@ Creates the Socket.IO client, registers all event listeners, and exports control
 
 ### Supporting Assets
 #### `package.json`
-Defines the `npm start` script (`node server.js`) and runtime dependencies (`express`, `socket.io`).
+Defines the `npm start` script (`node server.js`) and runtime dependencies (`express`, `socket.io`, `rate-limiter-flexible`).
 
 #### `SETUP_AND_RUN.md` and `README.md`
 Provide operational guidance and high-level overview, respectively. Both describe the same modules listed here.

@@ -1,6 +1,6 @@
 # SeqRoom – Setup and Run Guide
 
-This guide covers installation, execution, architecture, and troubleshooting for the SeqRoom prototype. Paths below assume you are in the repository root (`/Users/igazbator/seqroom`); adjust if your checkout lives elsewhere.
+This guide covers installation, execution, architecture, and troubleshooting for the SeqRoom prototype. All commands assume you are in the repository root; adjust paths if your checkout lives elsewhere.
 
 ## Prerequisites
 - Node.js 18 or newer
@@ -10,30 +10,26 @@ This guide covers installation, execution, architecture, and troubleshooting for
 
 ## Installation
 ```bash
-cd /Users/igazbator/seqroom
 npm install
 ```
 
 If dependencies ever become corrupted:
 ```bash
-cd /Users/igazbator/seqroom
-rm -rf node_modules package-lock.json
-npm install
+rm -rf node_modules package-lock.json && npm install
 ```
 
 ## Running the Server
 ```bash
-cd /Users/igazbator/seqroom
 npm start
 ```
 
 Sample output:
 ```
-Seqroom server running on:
-  Local:   http://localhost:3000
-  Network: http://192.168.x.x:3000
+Seqroom server running on http://localhost:3000
+Seqroom available on your network:
+  http://192.168.x.x:3000
 ```
-Open the printed URL in a browser. Additional LAN addresses appear for every IPv4 interface so phones/tablets on the same Wi-Fi can join.
+Open the local URL in a browser. LAN addresses are printed for every external IPv4 interface so phones and tablets on the same Wi-Fi can join.
 
 ## Accessing the App
 - **Local machine**: `http://localhost:3000`
@@ -56,10 +52,12 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 
 ## Operating the Application
 ### Create or Join a Room
-1. Visit the app.
-2. Click **Create Room** to generate a code and enter the sequencer.
-3. Share the code. Collaborators click **Join Room**, enter the code, and receive the full transport/instrument state.
-4. Use **Leave Room** to return to the landing page. Rejoin by entering the same code.
+1. Visit the app. Optionally enter a display name.
+2. Click **Create Room**. A modal prompts for a room name (letters, numbers, spaces, and hyphens are allowed). The server converts it to a URL slug and opens the sequencer.
+3. Inside the room, click **Invite** to generate a signed invite link (`/r/<slug>?inv=<token>`). Share that link with collaborators.
+4. Collaborators open the invite link directly, or click **Join Room** on the landing page and paste the link or token. They immediately receive the full transport/instrument state.
+5. Invite tokens expire after 1 hour. Rooms are kept alive for up to 1 hour after the last member leaves, then automatically cleaned up.
+6. Use **Leave Room** to return to the landing page.
 
 ### Instruments and Steps
 - Open the synth modal to add TB-303, TR-808, Poly Synth, or Sampler instruments.
@@ -86,7 +84,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 | `Cannot GET /` | Run `npm start` from the repo root and ensure it stays open. |
 | UI loads but no sound | Click anywhere to unlock audio; confirm the browser supports Web Audio. |
 | Recording button disabled | Browser does not expose `AudioWorkletNode`. Use a supported browser (Chrome, Edge, Firefox). |
-| Room join fails | Codes are alphanumeric plus `_`/`-` and must match exactly. Ensure the server log still shows the room. |
+| Room join fails | Paste the full invite link or token into the join prompt. Tokens expire after 1 hour; request a fresh invite from someone already in the room. |
 | Sampler upload rejected | File exceeds 5 MB or uses a mime type outside `audio/wav`, `audio/x-wav`, `audio/mpeg`, `audio/mp3`. Trim or convert the file. |
 | Port 3000 already in use | Stop other processes or free the port (`lsof -i :3000` on macOS/Linux, `netstat -ano | findstr :3000` on Windows). |
 | Dependencies missing | Reinstall with `rm -rf node_modules package-lock.json && npm install`. |
@@ -103,7 +101,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 
 ## Important Notes
 - **Audio unlock**: Most browsers require a user gesture before starting the AudioContext. `app.js` calls `primeAudioUnlock`, but you still need to click once when prompted.
-- **Security**: There is no authentication, rate limiting, or persistence. Deploy only on trusted networks or add your own middleware first.
+- **Security**: There is no user authentication or data persistence. Rate limiting is active server-side (room creation, joins, instrument edits, and tempo changes). Deploy only on trusted networks.
 - **Resource usage**: Every client renders all instruments it can see. Keep card counts reasonable on low-power devices.
 - **Single server instance**: All connected rooms share the same Node process; stopping the server clears every room.
 
@@ -124,7 +122,7 @@ npm start | tee server.log
 ```
 
 ## Final Checklist Before Launch
-- [ ] You are inside `/Users/igazbator/seqroom`
+- [ ] You are inside the repository root
 - [ ] `npm install` has been run at least once
 - [ ] Port 3000 is free
 - [ ] Browser supports Web Audio + AudioWorklet
