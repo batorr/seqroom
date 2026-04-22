@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>seqroom</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Play:wght@400;700&display=swap" rel="stylesheet">
     <style>
       :root {
         color-scheme: dark;
@@ -12,22 +15,30 @@
         --sidebar-panel-width: min(320px, 85vw);
 
         /* Surfaces */
-        --surface-0: #0f172a;
-        --surface-1: rgba(15, 23, 42, 0.45);
-        --surface-2: rgba(15, 23, 42, 0.55);
-        --surface-3: rgba(15, 23, 42, 0.65);
-        --surface-4: rgba(15, 23, 42, 0.72);
-        --surface-5: rgba(15, 23, 42, 0.86);
+        --surface-0: #111115;
+        --surface-1: rgba(60, 64, 78, 0.40);
+        --surface-2: rgba(70, 74, 90, 0.52);
+        --surface-3: rgba(82, 88, 108, 0.66);
+        --surface-4: rgba(90, 96, 118, 0.78);
+        --surface-5: rgba(20, 20, 26, 0.94);
+
+        /* Glass / overlay */
+        --glass: rgba(24, 24, 32, 0.92);
+        --glass-deep: rgba(14, 14, 20, 0.94);
+        --overlay: rgba(8, 8, 14, 0.65);
+        --input-bg: rgba(14, 14, 20, 0.75);
+        --silver: rgba(180, 185, 210, 0.18);
+        --shine: rgba(255, 255, 255, 0.10);
 
         /* Borders */
-        --border: rgba(148, 163, 184, 0.22);
-        --border-md: rgba(148, 163, 184, 0.35);
-        --border-strong: rgba(148, 163, 184, 0.45);
+        --border: rgba(210, 215, 235, 0.18);
+        --border-md: rgba(218, 222, 242, 0.36);
+        --border-strong: rgba(230, 234, 252, 0.60);
 
         /* Text */
-        --text: #f8fafc;
-        --text-secondary: rgba(226, 232, 240, 0.9);
-        --text-muted: rgba(148, 163, 184, 0.85);
+        --text: #f6f7fb;
+        --text-secondary: rgba(232, 234, 246, 0.95);
+        --text-muted: rgba(168, 174, 200, 0.90);
 
         /* Accent — sky blue */
         --accent: #38bdf8;
@@ -65,7 +76,11 @@
         display: flex;
         justify-content: center;
         align-items: stretch;
-        background: radial-gradient(circle at 0% 0%, var(--accent-faint), var(--surface-0) 65%);
+        background:
+            radial-gradient(ellipse at 25% 0%, rgba(200, 210, 245, 0.13) 0%, transparent 50%),
+            radial-gradient(ellipse at 75% 100%, rgba(160, 170, 210, 0.09) 0%, transparent 45%),
+            radial-gradient(circle at 0% 0%, var(--accent-faint), var(--surface-0) 60%),
+            var(--surface-0);
         color: var(--text);
       }
 
@@ -85,6 +100,7 @@
 
       .app-header h1 {
         margin: 0;
+        font-family: "Play", sans-serif;
         font-size: clamp(2rem, 4vw, 3.5rem);
         letter-spacing: 0.35em;
         font-weight: 700;
@@ -95,9 +111,11 @@
       .sequencer-shell {
         padding: 28px 32px;
         border-radius: var(--r-2xl);
-        background: var(--surface-4);
+        background: linear-gradient(160deg, rgba(90, 96, 118, 0.68), rgba(52, 56, 72, 0.78));
         border: 1px solid var(--border-md);
-        box-shadow: 0 32px 60px rgba(15, 23, 42, 0.35);
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.14) inset,
+            0 32px 64px rgba(4, 4, 10, 0.60);
         display: flex;
         flex-direction: column;
         gap: 24px;
@@ -179,15 +197,18 @@
       }
 
       button.primary {
-        background: linear-gradient(135deg, var(--accent), var(--indigo));
-        color: var(--surface-0);
-        box-shadow: 0 14px 30px var(--accent-glow);
+        font-family: "Play", sans-serif;
+        letter-spacing: 0.12em;
+        background: linear-gradient(145deg, #c8ccd8 0%, #8e93a8 45%, #6a6f82 100%);
+        color: #0e0e14;
+        box-shadow: 0 1px 0 rgba(255,255,255,0.45) inset, 0 14px 30px rgba(8, 8, 14, 0.45);
+        text-shadow: 0 1px 0 rgba(255,255,255,0.25);
       }
 
       button.subtle,
       .transport-button {
-        background: rgba(148, 163, 184, 0.2);
-        color: #e2e8f0;
+        background: var(--silver);
+        color: var(--text-secondary);
         box-shadow: inset 0 0 0 1px var(--border-md);
       }
 
@@ -239,7 +260,7 @@
       .modal-backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(10, 15, 28, 0.65);
+        background: var(--overlay);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -255,10 +276,10 @@
 
       .modal-panel {
         width: min(520px, 92vw);
-        background: rgba(15, 23, 42, 0.92);
+        background: var(--glass);
         border-radius: var(--r-2xl);
-        border: 1px solid var(--border);
-        box-shadow: 0 28px 60px rgba(10, 15, 28, 0.45);
+        border: 1px solid var(--border-md);
+        box-shadow: 0 1px 0 var(--shine) inset, 0 28px 60px rgba(4, 4, 10, 0.55);
         padding: 28px;
         display: flex;
         flex-direction: column;
@@ -503,7 +524,7 @@
         height: 44px;
         border-radius: var(--r-full);
         border: none;
-        background: rgba(148, 163, 184, 0.18);
+        background: var(--silver);
         color: var(--text);
         font-size: 1.25rem;
         line-height: 1;
@@ -511,7 +532,7 @@
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        box-shadow: 0 18px 30px rgba(15, 23, 42, 0.35);
+        box-shadow: 0 18px 30px rgba(4, 4, 10, 0.40);
         transition: background 160ms ease, transform 160ms ease;
       }
 
@@ -548,7 +569,7 @@
         gap: 18px;
         background: var(--surface-5);
         border-right: 1px solid var(--border);
-        box-shadow: 0 32px 60px rgba(10, 15, 28, 0.55);
+        box-shadow: 0 32px 60px rgba(4, 4, 10, 0.60);
         transform: translateX(-32px);
         opacity: 0;
         transition: transform 0.3s ease, opacity 0.3s ease;
@@ -673,7 +694,7 @@
         border-radius: var(--r-xl);
         background: var(--surface-3);
         border: 1px solid var(--border);
-        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.28);
+        box-shadow: 0 1px 0 var(--shine) inset, 0 18px 36px rgba(4, 4, 10, 0.40);
         display: flex;
         flex-direction: column;
         gap: 16px;
@@ -726,7 +747,7 @@
       .synth-name-group { display: flex; align-items: center; gap: 10px; }
       .synth-meta { display: flex; flex-direction: column; gap: 4px; }
 
-      .synth-meta h3 { margin: 0; font-size: 1.2rem; letter-spacing: 0.14em; text-transform: uppercase; }
+      .synth-meta h3 { margin: 0; font-family: "Play", sans-serif; font-size: 1.2rem; letter-spacing: 0.14em; text-transform: uppercase; }
 
       .synth-type {
         font-size: 0.8rem;
@@ -742,7 +763,7 @@
       .instrument-mute-button {
         appearance: none;
         border: 1px solid var(--border-md);
-        background: rgba(148, 163, 184, 0.15);
+        background: var(--silver);
         color: var(--text-secondary);
         border-radius: var(--r-full);
         padding: 6px 12px;
@@ -764,7 +785,7 @@
       .rename-instrument:hover,
       .instrument-lock-button:hover,
       .instrument-mute-button:hover {
-        background: rgba(148, 163, 184, 0.25);
+        background: rgba(180, 185, 210, 0.25);
         border-color: var(--border-strong);
         transform: translateY(-1px);
       }
@@ -813,7 +834,7 @@
         padding: 6px 12px;
         border-radius: var(--r-full);
         border: 1px solid var(--border-md);
-        background: rgba(15, 23, 42, 0.75);
+        background: var(--input-bg);
         color: var(--text);
         font-size: 1rem;
         letter-spacing: 0.14em;
@@ -921,8 +942,9 @@
         gap: 6px;
         padding: 10px 12px;
         border-radius: var(--r-md);
-        background: var(--surface-2);
-        border: 1px solid rgba(148, 163, 184, 0.14);
+        background: linear-gradient(160deg, rgba(110, 116, 140, 0.55), rgba(72, 76, 96, 0.62));
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset;
       }
 
       .param-control label {
@@ -981,7 +1003,7 @@
         position: absolute;
         top: -8px;
         right: -8px;
-        background: rgba(148, 163, 184, 0.2);
+        background: var(--silver);
         border: 1px solid var(--border-md);
         width: 18px;
         height: 18px;
@@ -1056,14 +1078,15 @@
         gap: 8px;
         padding: 10px 8px;
         border-radius: var(--r-md);
-        border: 2px solid rgba(248, 250, 252, 0.12);
-        background: var(--surface-2);
+        border: 2px solid rgba(220, 224, 248, 0.22);
+        background: linear-gradient(180deg, rgba(108, 114, 140, 0.52), rgba(68, 72, 92, 0.60));
+        box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset;
         transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
         min-width: 48px;
       }
 
       .step-cell.active { background: var(--accent); color: var(--surface-0); border-color: #e0f2fe; }
-      .step-cell.active .step-index { color: rgba(15, 23, 42, 0.65); }
+      .step-cell.active .step-index { color: rgba(8, 8, 14, 0.65); }
 
       .step-cell.playing {
         border-color: var(--warn);
@@ -1081,7 +1104,7 @@
       .step-cell.step-disabled .step-index { opacity: 0.6; }
 
       .step-cell.step-disabled .step-pitch-select { opacity: 0.4; pointer-events: none; }
-      .step-cell.step-disabled .drum-indicator { background: rgba(148, 163, 184, 0.12); box-shadow: none; }
+      .step-cell.step-disabled .drum-indicator { background: rgba(180, 185, 210, 0.12); box-shadow: none; }
 
       .step-toggle {
         display: flex;
@@ -1108,7 +1131,7 @@
         padding: 4px 6px;
         border-radius: var(--r-sm);
         border: 1px solid var(--border-strong);
-        background: rgba(15, 23, 42, 0.7);
+        background: var(--input-bg);
         color: inherit;
         font-size: 0.75rem;
         letter-spacing: 0.03em;
@@ -1129,7 +1152,7 @@
         width: 100%;
         height: 8px;
         border-radius: var(--r-full);
-        background: rgba(148, 163, 184, 0.3);
+        background: rgba(180, 185, 210, 0.28);
         transition: background 140ms ease, box-shadow 140ms ease;
       }
 
@@ -1143,7 +1166,7 @@
       .drum-cell.drum-active {
         background: var(--drum-active-bg, rgba(56, 189, 248, 0.2));
         border-color: var(--border-md);
-        box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.2);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.20);
         color: var(--text-secondary);
       }
 
@@ -1156,7 +1179,7 @@
 
       .drum-cell.drum-active.playing {
         background: var(--drum-active-bg, rgba(56, 189, 248, 0.25));
-        box-shadow: 0 0 14px rgba(250, 204, 21, 0.45), inset 0 0 0 1px rgba(15, 23, 42, 0.2);
+        box-shadow: 0 0 14px rgba(250, 204, 21, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.20);
       }
 
       .sampler-cell {
@@ -1186,14 +1209,14 @@
         width: 16px;
         height: 16px;
         border-radius: 50%;
-        background: linear-gradient(135deg, rgba(248, 250, 252, 0.15), rgba(148, 163, 184, 0.15));
+        background: linear-gradient(135deg, rgba(248, 250, 252, 0.15), rgba(180, 185, 210, 0.15));
         border: 2px solid var(--border-strong);
         transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
       }
 
       .sampler-indicator.active {
         background: var(--sampler-color, var(--accent));
-        border-color: rgba(15, 23, 42, 0.85);
+        border-color: rgba(8, 8, 14, 0.85);
         transform: scale(1.1);
       }
 
@@ -1212,7 +1235,7 @@
       .pitch-popup {
         position: absolute;
         z-index: 1200;
-        background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.88));
+        background: var(--glass);
         border: 1px solid var(--border-md);
         backdrop-filter: blur(12px);
         border-radius: 18px;
@@ -1221,7 +1244,7 @@
         display: flex;
         flex-direction: column;
         gap: 14px;
-        box-shadow: 0 28px 65px rgba(15, 23, 42, 0.5);
+        box-shadow: 0 1px 0 var(--shine) inset, 0 28px 65px rgba(4, 4, 10, 0.60);
         opacity: 0;
         transform: translateY(12px) scale(0.94);
         transition: opacity 160ms ease, transform 160ms ease;
@@ -1239,8 +1262,8 @@
         justify-content: center;
         border-radius: 12px;
         padding: 14px 20px;
-        background: rgba(15, 23, 42, 0.55);
-        border: 1px solid var(--border);
+        background: rgba(20, 20, 28, 0.55);
+        border: 1px solid var(--border-md);
         cursor: ns-resize;
         user-select: none;
         transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
@@ -1317,7 +1340,7 @@
       .about-modal {
         position: fixed;
         inset: 0;
-        background: rgba(2, 6, 23, 0.65);
+        background: var(--overlay);
         backdrop-filter: blur(6px);
         display: flex;
         align-items: center;
@@ -1329,9 +1352,9 @@
         width: min(360px, 92vw);
         border-radius: var(--r-lg);
         border: 1px solid var(--border-md);
-        background: rgba(15, 23, 42, 0.92);
+        background: var(--glass);
         padding: 22px;
-        box-shadow: 0 24px 48px rgba(2, 6, 23, 0.65);
+        box-shadow: 0 1px 0 var(--shine) inset, 0 24px 48px rgba(4, 4, 10, 0.65);
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -1349,9 +1372,9 @@
       .about-modal-close {
         appearance: none;
         border: none;
-        background: rgba(148, 163, 184, 0.18);
+        background: var(--silver);
         border-radius: var(--r-full);
-        color: rgba(248, 250, 252, 0.8);
+        color: var(--text-secondary);
         padding: 4px 12px;
         font-size: 0.75rem;
         letter-spacing: 0.12em;
@@ -1359,7 +1382,7 @@
         transition: background 140ms ease, transform 140ms ease;
       }
 
-      .about-modal-close:hover { background: rgba(148, 163, 184, 0.3); transform: translateY(-1px); }
+      .about-modal-close:hover { background: rgba(180, 185, 210, 0.30); transform: translateY(-1px); }
 
       .about-modal p { margin: 0; color: var(--text-secondary); line-height: 1.5; font-size: 0.9rem; }
 
