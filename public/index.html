@@ -102,23 +102,37 @@
         margin: 0;
         font-family: "Play", sans-serif;
         font-size: clamp(2rem, 4vw, 3.5rem);
+        font-weight: 400;
         letter-spacing: 0.35em;
-        font-weight: 700;
+        text-transform: uppercase;
+        background: linear-gradient(180deg, #ffffff 0%, #c0c8d8 55%, #6b7084 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
       }
 
       /* ─── Panels ─────────────────────────────────────────────────────── */
       .panel,
       .sequencer-shell {
+        position: relative;
         padding: 28px 32px;
         border-radius: var(--r-2xl);
-        background: linear-gradient(160deg, rgba(90, 96, 118, 0.68), rgba(52, 56, 72, 0.78));
+        background: var(--glass);
         border: 1px solid var(--border-md);
-        box-shadow:
-            0 1px 0 rgba(255, 255, 255, 0.14) inset,
-            0 32px 64px rgba(4, 4, 10, 0.60);
+        box-shadow: 0 1px 0 var(--shine) inset, 0 32px 64px rgba(4, 4, 10, 0.60);
         display: flex;
         flex-direction: column;
         gap: 24px;
+      }
+
+      .panel::before,
+      .sequencer-shell::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(180deg, var(--shine) 0%, transparent 18%);
+        pointer-events: none;
       }
 
       .panel {
@@ -692,14 +706,23 @@
         position: relative;
         padding: 20px;
         border-radius: var(--r-xl);
-        background: var(--surface-3);
-        border: 1px solid var(--border);
+        background: var(--glass);
+        border: 1px solid var(--border-md);
         box-shadow: 0 1px 0 var(--shine) inset, 0 18px 36px rgba(4, 4, 10, 0.40);
         display: flex;
         flex-direction: column;
         gap: 16px;
         animation: synth-pop 240ms ease both;
         width: 100%;
+      }
+
+      .synth-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(180deg, var(--shine) 0%, transparent 18%);
+        pointer-events: none;
       }
 
       .synth-card.active { box-shadow: 0 24px 48px var(--indigo-glow), 0 0 0 2px var(--indigo-focus); }
