@@ -538,13 +538,15 @@
         color: var(--text);
         font-size: 1.25rem;
         line-height: 1;
-        display: flex;
+        display: none;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         box-shadow: 0 18px 30px rgba(4, 4, 10, 0.40);
         transition: background 160ms ease, transform 160ms ease;
       }
+
+      .sidebar-toggle.visible { display: flex; }
 
       .sidebar-toggle:hover { background: var(--indigo-faint); transform: translateY(-1px); }
 

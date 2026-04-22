@@ -237,3 +237,9 @@ export function openSidebar(options = {}) {
 export function closeSidebar(options = {}) {
     toggleSidebar(false, options);
 }
+
+export function setSidebarToggleVisible(visible) {
+    if (!sidebarToggleBtn) return;
+    sidebarToggleBtn.classList.toggle('visible', visible);
+    if (!visible) toggleSidebar(false);
+}

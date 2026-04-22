@@ -3,7 +3,7 @@
 
 import { state, getDisplayNameOrDefault } from '../state/main.js';
 import { socketState } from '../state/audio.js';
-import { initializeSidebar, renderInstrumentSidebar } from './sidebar.js';
+import { initializeSidebar, renderInstrumentSidebar, setSidebarToggleVisible } from './sidebar.js';
 
 // DOM Element References
 export const landingEl = document.getElementById('landing');
@@ -46,6 +46,7 @@ export function showSequencer() {
     transportToggleBtn.disabled = false;
     showRoomCodeHint('');
     updateRoomDisplay();
+    setSidebarToggleVisible(true);
     if (inviteRoomBtn) {
         inviteRoomBtn.disabled = !state.isInRoom;
     }
@@ -55,6 +56,7 @@ export function showLanding() {
     landingEl.classList.remove('hidden');
     sequencerEl.classList.add('hidden');
     transportToggleBtn.disabled = true;
+    setSidebarToggleVisible(false);
     if (inviteRoomBtn) {
         inviteRoomBtn.disabled = true;
     }
