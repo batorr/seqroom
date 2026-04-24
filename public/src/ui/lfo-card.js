@@ -1,13 +1,78 @@
 // LFO Card UI - renders LFO panels and handles interaction
 
 import {
-    createLFO, removeLFO, getLFOs,
+    registerLFOFromServer, removeLFOFromEngine, applyServerLFO, hydrateServerLFOs,
+    getLFOs, getLFO,
     addTarget, removeTarget, isParamMapped, getModulatedParam,
     getMappingLFOId, setMappingLFO, onLFOTick,
     waveformAt, LFO_DIVISIONS,
 } from '../audio/lfo.js';
 import { state } from '../state/main.js';
 import { formatParamDisplay } from '../utils/helpers.js';
+
+export { hydrateServerLFOs };
+
+let _socket = null;
+const _suppressedLFOs = new Map(); // lfoId → expiry ms
+const _updateTimers = new Map();   // lfoId → timeout id
+
+function _suppress(lfoId) { _suppressedLFOs.set(lfoId, Date.now() + 250); }
+function _isSuppressed(lfoId) {
+    const exp = _suppressedLFOs.get(lfoId);
+    if (!exp) return false;
+    if (Date.now() > exp) { _suppressedLFOs.delete(lfoId); return false; }
+    return true;
+}
+
+function _serializeLFO(lfo) {
+    return {
+        waveform: lfo.waveform, shape: lfo.shape, steps: lfo.steps,
+        jitter: lfo.jitter, smooth: lfo.smooth, division: lfo.division,
+        depth: lfo.depth, offset: lfo.offset, phase: lfo.phase,
+        targets: lfo.targets,
+    };
+}
+
+function _scheduleLFOUpdate(lfoId) {
+    if (_updateTimers.has(lfoId)) clearTimeout(_updateTimers.get(lfoId));
+    _updateTimers.set(lfoId, setTimeout(() => {
+        _updateTimers.delete(lfoId);
+        const lfo = getLFO(lfoId);
+        if (!lfo || !_socket) return;
+        _suppress(lfoId);
+        _socket.emit('lfo:update', { lfoId, params: _serializeLFO(lfo) });
+    }, 80));
+}
+
+function _emitTargetsUpdate(lfoId) {
+    const lfo = getLFO(lfoId);
+    if (!lfo || !_socket) return;
+    _suppress(lfoId);
+    _socket.emit('lfo:update', { lfoId, params: { targets: lfo.targets } });
+}
+
+export function setupLFOSocketEvents(socket) {
+    _socket = socket;
+
+    socket.on('lfo:added', (lfoData) => {
+        registerLFOFromServer(lfoData);
+        renderLFOCards();
+    });
+
+    socket.on('lfo:removed', ({ lfoId }) => {
+        removeLFOFromEngine(lfoId);
+        renderLFOCards();
+        refreshParamIndicators();
+    });
+
+    socket.on('lfo:updated', (lfoData) => {
+        const targetsChanged = applyServerLFO(lfoData);
+        if (!_isSuppressed(lfoData.id) || targetsChanged) {
+            renderLFOCards();
+        }
+        refreshParamIndicators();
+    });
+}
 
 const CYCLES = 2; // cycles shown in canvas
 
@@ -19,8 +84,7 @@ export function initLFOPanel() {
     const addBtn = document.getElementById('add-lfo');
     if (addBtn) {
         addBtn.addEventListener('click', () => {
-            createLFO();
-            renderLFOCards();
+            if (_socket) _socket.emit('lfo:add', {});
         });
     }
 
@@ -34,6 +98,7 @@ export function initLFOPanel() {
         const { instrumentId, paramKey, paramMin, paramMax, paramLabel } = ctrl.dataset;
         if (!instrumentId || !paramKey || paramMin === undefined) return;
         addTarget(mappingId, instrumentId, paramKey, Number(paramMin), Number(paramMax), paramLabel || paramKey);
+        _emitTargetsUpdate(mappingId);
         setMappingLFO(null);
         renderLFOCards();
         refreshParamIndicators();
@@ -106,9 +171,7 @@ function buildCard(lfo) {
     removeBtn.textContent = '×';
     removeBtn.title = 'Remove LFO';
     removeBtn.addEventListener('click', () => {
-        removeLFO(lfo.id);
-        renderLFOCards();
-        refreshParamIndicators();
+        if (_socket) _socket.emit('lfo:remove', { lfoId: lfo.id });
     });
 
     header.append(name, mapBtn, removeBtn);
@@ -144,13 +207,14 @@ function buildCard(lfo) {
         btn.addEventListener('click', () => {
             lfo.waveform = w;
             waveBtns.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.wave === w));
+            _scheduleLFOUpdate(lfo.id);
         });
         waveBtns.appendChild(btn);
     });
     waveCtrl.append(waveLabel, waveBtns);
     row1.appendChild(waveCtrl);
 
-    row1.appendChild(makeSlider('Shape', lfo, 'shape', 0, 1, 0.01, v => `${Math.round(v * 100)}%`));
+    row1.appendChild(makeSlider('Shape', lfo, 'shape', 0, 1, 0.01, v => `${Math.round(v * 100)}%`, () => _scheduleLFOUpdate(lfo.id)));
 
     // Steps select
     const stepsCtrl = document.createElement('div');
@@ -165,12 +229,12 @@ function buildCard(lfo) {
         opt.selected = lfo.steps === n;
         stepsSelect.appendChild(opt);
     });
-    stepsSelect.addEventListener('change', () => { lfo.steps = Number(stepsSelect.value); });
+    stepsSelect.addEventListener('change', () => { lfo.steps = Number(stepsSelect.value); _scheduleLFOUpdate(lfo.id); });
     stepsCtrl.append(stepsLabel, stepsSelect);
     row1.appendChild(stepsCtrl);
 
-    row1.appendChild(makeSlider('Jitter', lfo, 'jitter', 0, 1, 0.01, v => `${Math.round(v * 100)}%`));
-    row1.appendChild(makeSlider('Smooth', lfo, 'smooth', 0, 1, 0.01, v => `${Math.round(v * 100)}%`));
+    row1.appendChild(makeSlider('Jitter', lfo, 'jitter', 0, 1, 0.01, v => `${Math.round(v * 100)}%`, () => _scheduleLFOUpdate(lfo.id)));
+    row1.appendChild(makeSlider('Smooth', lfo, 'smooth', 0, 1, 0.01, v => `${Math.round(v * 100)}%`, () => _scheduleLFOUpdate(lfo.id)));
 
     controls.appendChild(row1);
 
@@ -193,13 +257,14 @@ function buildCard(lfo) {
     });
     rateSelect.addEventListener('change', () => {
         lfo.division = Number(rateSelect.value);
+        _scheduleLFOUpdate(lfo.id);
     });
     rateCtrl.append(rateLabel, rateSelect);
     row2.appendChild(rateCtrl);
 
-    row2.appendChild(makeSlider('Depth', lfo, 'depth', 0, 2, 0.01, v => `${Math.round(v * 100)}%`));
-    row2.appendChild(makeSlider('Offset', lfo, 'offset', -1, 1, 0.01, v => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`));
-    row2.appendChild(makeSlider('Phase', lfo, 'phase', 0, 1, 0.01, v => `${Math.round(v * 360)}°`));
+    row2.appendChild(makeSlider('Depth', lfo, 'depth', 0, 2, 0.01, v => `${Math.round(v * 100)}%`, () => _scheduleLFOUpdate(lfo.id)));
+    row2.appendChild(makeSlider('Offset', lfo, 'offset', -1, 1, 0.01, v => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`, () => _scheduleLFOUpdate(lfo.id)));
+    row2.appendChild(makeSlider('Phase', lfo, 'phase', 0, 1, 0.01, v => `${Math.round(v * 360)}°`, () => _scheduleLFOUpdate(lfo.id)));
 
     controls.appendChild(row2);
 
@@ -210,7 +275,7 @@ function buildCard(lfo) {
     return card;
 }
 
-function makeSlider(labelText, lfo, key, min, max, step, fmt) {
+function makeSlider(labelText, lfo, key, min, max, step, fmt, onChange) {
     const ctrl = document.createElement('div');
     ctrl.className = 'lfo-control lfo-slider-ctrl';
 
@@ -232,6 +297,7 @@ function makeSlider(labelText, lfo, key, min, max, step, fmt) {
     input.addEventListener('input', () => {
         lfo[key] = Number(input.value);
         valSpan.textContent = fmt(lfo[key]);
+        onChange?.();
     });
 
     ctrl.append(labelRow, input);
@@ -260,6 +326,7 @@ function buildTargets(lfo, isMappingThis) {
         removeBtn.textContent = '×';
         removeBtn.addEventListener('click', () => {
             removeTarget(lfo.id, t.instrumentId, t.paramKey);
+            _emitTargetsUpdate(lfo.id);
             renderLFOCards();
             refreshParamIndicators();
         });

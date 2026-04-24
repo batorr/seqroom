@@ -30,6 +30,8 @@ import { updateTempoDisplay } from '../ui/tempo-controls.js';
 import { syncAudioScheduler, stopAudioScheduler } from '../audio/scheduler.js';
 import { ensureAudioContext, applyClockCorrection, getClientAbsoluteTime } from '../audio/main.js';
 import { prepareSamplerAudio, cleanupSamplerBuffers } from '../audio/instruments/sampler.js';
+import { hydrateServerLFOs } from '../audio/lfo.js';
+import { renderLFOCards, refreshParamIndicators } from '../ui/lfo-card.js';
 
 // Initialize Socket.IO
 export const socket = io({ autoConnect: false });
@@ -94,8 +96,11 @@ export function setupSocketEvents() {
         }
         socketState.pendingDefaultInstrumentLabel = null;
         state.instruments.forEach((instrument) => prepareSamplerAudio(instrument));
+        hydrateServerLFOs(payload.lfos || []);
         renderTransport();
         renderInstruments();
+        renderLFOCards();
+        refreshParamIndicators();
         updateConnectionsDisplay(payload.connections ?? 0);
         syncAudioScheduler();
         showRoomCodeHint(state.roomSlug || '');

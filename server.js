@@ -330,6 +330,51 @@ function createInstrument(type, options = {}) {
   return instrument;
 }
 
+const VALID_LFO_WAVEFORMS = new Set(['sine', 'saw', 'square', 'sah']);
+const VALID_LFO_DIVISIONS = new Set([0.125, 0.25, 0.5, 1, 2, 4, 8, 16]);
+const VALID_LFO_STEPS = new Set([0, 2, 4, 8, 16, 32]);
+
+function createLFOState() {
+  return {
+    id: randomUUID(),
+    waveform: 'sine',
+    shape: 0, steps: 0, jitter: 0, smooth: 0,
+    division: 1, depth: 1, offset: 0, phase: 0,
+    targets: [],
+  };
+}
+
+function applyLFOParams(lfo, params) {
+  if (typeof params.waveform === 'string' && VALID_LFO_WAVEFORMS.has(params.waveform)) {
+    lfo.waveform = params.waveform;
+  }
+  if (typeof params.division === 'number' && VALID_LFO_DIVISIONS.has(params.division)) {
+    lfo.division = params.division;
+  }
+  if (typeof params.steps === 'number' && VALID_LFO_STEPS.has(params.steps)) {
+    lfo.steps = params.steps;
+  }
+  ['shape', 'jitter', 'smooth', 'depth', 'offset', 'phase'].forEach(key => {
+    if (params[key] !== undefined) {
+      const v = Number(params[key]);
+      if (Number.isFinite(v)) lfo[key] = Math.max(-2, Math.min(2, v));
+    }
+  });
+  if (Array.isArray(params.targets)) {
+    lfo.targets = params.targets
+      .filter(t => typeof t.instrumentId === 'string' && typeof t.paramKey === 'string'
+                && Number.isFinite(t.paramMin) && Number.isFinite(t.paramMax))
+      .slice(0, 32)
+      .map(t => ({
+        instrumentId: t.instrumentId,
+        paramKey: String(t.paramKey).slice(0, 64),
+        paramMin: Number(t.paramMin),
+        paramMax: Number(t.paramMax),
+        label: typeof t.label === 'string' ? t.label.slice(0, 64) : String(t.paramKey),
+      }));
+  }
+}
+
 function createStepSequence(type, length) {
   const targetLength = clampStepCount(length);
   return Array.from({ length: targetLength }, () => createStepTemplate(type));
@@ -1024,6 +1069,7 @@ function serializeRoomState(room) {
       .map(cloneInstrument),
     instrumentOrder: [...room.instrumentOrder],
     legacyPattern: [...room.legacyPattern],
+    lfos: [...(room.lfos || [])],
   };
 }
 
@@ -1105,12 +1151,14 @@ const io = new Server(server);
 
 // Rate limiters: points = max calls, duration = time window in seconds
 const rateLimiters = {
-  roomCreate:      new RateLimiterMemory({ points: 5,   duration: 60 }),  // 5 szoba/perc/IP
-  joinWithInvite:  new RateLimiterMemory({ points: 10,  duration: 60 }),  // 10 csatlakozás/perc/IP
-  instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),  // 10 hangszer/perc/socket
-  instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 paraméter/perc/socket (knob forgás)
-  instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 lépés/perc/socket
-  tempoSet:        new RateLimiterMemory({ points: 300, duration: 60 }),  // 300 tempóváltás/perc/socket
+  roomCreate:      new RateLimiterMemory({ points: 5,   duration: 60 }),
+  joinWithInvite:  new RateLimiterMemory({ points: 10,  duration: 60 }),
+  instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),
+  instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),
+  instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),
+  tempoSet:        new RateLimiterMemory({ points: 300, duration: 60 }),
+  lfoAdd:          new RateLimiterMemory({ points: 20,  duration: 60 }),
+  lfoUpdate:       new RateLimiterMemory({ points: 300, duration: 60 }),
 };
 
 async function checkRateLimit(limiter, key, socket, callback) {
@@ -1582,6 +1630,36 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('lfo:add', async (_payload, callback) => {
+    const respond = typeof callback === 'function' ? callback : () => {};
+    if (!await checkRateLimit(rateLimiters.lfoAdd, socket.id, socket, respond)) return;
+    const room = getRoomForSocket(socket);
+    if (!room) { respond({ ok: false, error: 'not-in-room' }); return; }
+    if ((room.lfos || []).length >= 8) { respond({ ok: false, error: 'lfo-limit' }); return; }
+    const lfo = createLFOState();
+    room.lfos = room.lfos || [];
+    room.lfos.push(lfo);
+    io.to(room.id).emit('lfo:added', lfo);
+    respond({ ok: true, lfo });
+  });
+
+  socket.on('lfo:remove', ({ lfoId } = {}) => {
+    const room = getRoomForSocket(socket);
+    if (!room || typeof lfoId !== 'string') return;
+    room.lfos = (room.lfos || []).filter(l => l.id !== lfoId);
+    io.to(room.id).emit('lfo:removed', { lfoId });
+  });
+
+  socket.on('lfo:update', async ({ lfoId, params } = {}) => {
+    if (!await checkRateLimit(rateLimiters.lfoUpdate, socket.id, socket)) return;
+    const room = getRoomForSocket(socket);
+    if (!room || typeof lfoId !== 'string') return;
+    const lfo = (room.lfos || []).find(l => l.id === lfoId);
+    if (!lfo) return;
+    applyLFOParams(lfo, params || {});
+    io.to(room.id).emit('lfo:updated', lfo);
+  });
+
   socket.on('disconnect', () => {
     const { roomId } = socket.data;
     if (!roomId) {
@@ -1625,6 +1703,7 @@ function createRoomState({
     },
     instruments: new Map(),
     instrumentOrder: [],
+    lfos: [],
     graceUsed: false,
   };
 
@@ -1666,6 +1745,7 @@ async function joinRoom(socket, roomId, { role = 'guest' } = {}) {
     transport: state.transport,
     instruments: state.instruments,
     instrumentOrder: state.instrumentOrder,
+    lfos: state.lfos || [],
     // Legacy fields for backward compatibility.
     pattern: state.legacyPattern,
     legacyPattern: state.legacyPattern,

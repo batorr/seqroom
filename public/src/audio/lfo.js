@@ -116,13 +116,23 @@ function _tick(dt) {
     _tickCallbacks.forEach(cb => cb());
 }
 
-export function createLFO() {
-    const n = _nextId++;
+export function registerLFOFromServer(lfoData) {
+    if (lfos.has(lfoData.id)) {
+        applyServerLFO(lfoData);
+        return lfos.get(lfoData.id);
+    }
     const lfo = {
-        id: `lfo-${n}`, name: `LFO ${n}`,
-        waveform: 'sine', shape: 0, steps: 0, jitter: 0, smooth: 0,
-        division: 1, depth: 1.0, offset: 0.0, phase: 0.0,
-        targets: [],
+        id: lfoData.id,
+        waveform: lfoData.waveform || 'sine',
+        shape: lfoData.shape ?? 0,
+        steps: lfoData.steps ?? 0,
+        jitter: lfoData.jitter ?? 0,
+        smooth: lfoData.smooth ?? 0,
+        division: lfoData.division ?? 1,
+        depth: lfoData.depth ?? 1,
+        offset: lfoData.offset ?? 0,
+        phase: lfoData.phase ?? 0,
+        targets: lfoData.targets || [],
         _phase: 0, _out: 0, _sahValue: 0, _sahInit: false, _sahHistory: [],
     };
     lfos.set(lfo.id, lfo);
@@ -130,10 +140,28 @@ export function createLFO() {
     return lfo;
 }
 
-export function removeLFO(id) {
+export function applyServerLFO(lfoData) {
+    const lfo = lfos.get(lfoData.id);
+    if (!lfo) return false;
+    const prevTargets = JSON.stringify(lfo.targets);
+    ['waveform', 'shape', 'steps', 'jitter', 'smooth', 'division', 'depth', 'offset', 'phase'].forEach(k => {
+        if (lfoData[k] !== undefined) lfo[k] = lfoData[k];
+    });
+    if (Array.isArray(lfoData.targets)) lfo.targets = lfoData.targets;
+    return JSON.stringify(lfo.targets) !== prevTargets;
+}
+
+export function removeLFOFromEngine(id) {
     lfos.delete(id);
     if (_mappingLFOId === id) setMappingLFO(null);
     if (lfos.size === 0) _stopClock();
+}
+
+export function hydrateServerLFOs(lfosData) {
+    lfos.clear();
+    if (_mappingLFOId) setMappingLFO(null);
+    (lfosData || []).forEach(d => registerLFOFromServer(d));
+    if (lfos.size > 0) _startClock(); else _stopClock();
 }
 
 export function getLFOs() { return lfos; }
