@@ -1382,7 +1382,8 @@
       }
       .bg-swatch.purple { background: rgba(130, 60, 190, 0.75); }
       .bg-swatch.teal   { background: rgba(40, 180, 165, 0.75); }
-      .bg-swatch.custom { background: conic-gradient(red,yellow,lime,aqua,blue,magenta,red); }
+      .bg-swatch.custom { background: conic-gradient(red,yellow,lime,aqua,blue,magenta,red); position: relative; overflow: hidden; }
+      .bg-swatch.custom input[type=color] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: none; padding: 0; }
       .bg-swatch.active { border-color: rgba(255,255,255,0.75); transform: scale(1.3); }
 
       .app-footer-link {
@@ -1590,8 +1591,9 @@
           <div id="bg-color-picker" class="bg-color-picker hidden">
             <button class="bg-swatch purple active" data-color="purple" title="Purple"></button>
             <button class="bg-swatch teal" data-color="teal" title="Teal"></button>
-            <button class="bg-swatch custom" id="bg-custom-swatch" data-color="custom" title="Custom color"></button>
-            <input type="color" id="bg-custom-color" style="display:none" value="#a030ff">
+            <button class="bg-swatch custom" id="bg-custom-swatch" data-color="custom" title="Custom color">
+              <input type="color" id="bg-custom-color" value="#a030ff">
+            </button>
           </div>
         </div>
         <a id="footer-about-link" class="app-footer-link" href="#about">About</a>
@@ -1944,9 +1946,9 @@ void main(){
       }
     });
 
-    customSwatch.addEventListener('click', () => {
+    colorInput.addEventListener('click', (e) => {
+      e.stopPropagation();
       colorInput.value = customHex;
-      colorInput.click();
     });
 
     colorInput.addEventListener('input', (e) => {
