@@ -4,21 +4,23 @@
 import { audioState } from '../../state/audio.js';
 import { clampValue } from '../../utils/helpers.js';
 import { noteToFrequency } from '../../utils/audio.js';
+import { getModulatedParam } from '../lfo.js';
 
 export function scheduleTB303(instrument, step, when, ctx) {
     const params = instrument.params || {};
+    const id = instrument.id;
     const osc = ctx.createOscillator();
     osc.type = params.waveform === 'square' ? 'square' : 'sawtooth';
     osc.frequency.value = noteToFrequency(step.pitch || 'C2');
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    const cutoff = 200 + (params.cutoff ?? 0.5) * 6000;
+    const cutoff = 200 + getModulatedParam(id, 'cutoff', params.cutoff ?? 0.5, 0, 1) * 6000;
     filter.frequency.setValueAtTime(cutoff, when);
-    filter.Q.setValueAtTime(0.5 + (params.resonance ?? 0.5) * 12, when);
+    filter.Q.setValueAtTime(0.5 + getModulatedParam(id, 'resonance', params.resonance ?? 0.5, 0, 1) * 12, when);
 
     const env = ctx.createGain();
-    const volume = clampValue(params.volume ?? 0.8, 0, 1);
+    const volume = clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
     const decay = 0.1 + (params.decay ?? 0.5) * 0.5;
     const peakTime = when + 0.01;
     env.gain.setValueAtTime(0.0001, when);

@@ -4,22 +4,24 @@
 import { audioState } from '../../state/audio.js';
 import { clampValue } from '../../utils/helpers.js';
 import { createNoiseBuffer } from '../../utils/audio.js';
+import { getModulatedParam } from '../lfo.js';
 
 export function scheduleTR808(instrument, step, when, ctx) {
     const params = instrument.params || {};
+    const id = instrument.id;
     const layers = step.layers || {};
 
-    if (layers.kick) scheduleKick(params, when, ctx);
-    if (layers.snare) scheduleSnare(params, when, ctx);
-    if (layers.hat) scheduleHat(params, when, ctx);
-    if (layers.openhat) scheduleOpenHat(params, when, ctx);
-    if (layers.clap) scheduleClap(params, when, ctx);
+    if (layers.kick) scheduleKick(id, params, when, ctx);
+    if (layers.snare) scheduleSnare(id, params, when, ctx);
+    if (layers.hat) scheduleHat(id, params, when, ctx);
+    if (layers.openhat) scheduleOpenHat(id, params, when, ctx);
+    if (layers.clap) scheduleClap(id, params, when, ctx);
 }
 
-export function scheduleKick(params, when, ctx) {
-    const volume = clampValue(params.kickLevel ?? 0.9, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
-    const decay = clampValue(params.kickDecay ?? 0.8, 0.1, 2);
-    const tone = clampValue(params.kickTone ?? 60, 30, 100);
+export function scheduleKick(id, params, when, ctx) {
+    const volume = clampValue(getModulatedParam(id, 'kickLevel', params.kickLevel ?? 0.9, 0, 1), 0, 1) * clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
+    const decay = clampValue(getModulatedParam(id, 'kickDecay', params.kickDecay ?? 0.8, 0.1, 2), 0.1, 2);
+    const tone = clampValue(getModulatedParam(id, 'kickTone', params.kickTone ?? 60, 30, 100), 30, 100);
     const drive = clampValue(params.kickDrive ?? 0.15, 0, 1);
 
     const toneNorm = (tone - 30) / 70;
@@ -58,10 +60,10 @@ export function scheduleKick(params, when, ctx) {
     osc.stop(when + gainTime + 0.1);
 }
 
-export function scheduleSnare(params, when, ctx) {
-    const volume = clampValue(params.snareLevel ?? 0.7, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
-    const decay = clampValue(params.snareDecay ?? 0.7, 0.1, 1.5);
-    const tone = clampValue(params.snareTone ?? 0.5, 0, 1);
+export function scheduleSnare(id, params, when, ctx) {
+    const volume = clampValue(getModulatedParam(id, 'snareLevel', params.snareLevel ?? 0.7, 0, 1), 0, 1) * clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
+    const decay = clampValue(getModulatedParam(id, 'snareDecay', params.snareDecay ?? 0.7, 0.1, 1.5), 0.1, 1.5);
+    const tone = clampValue(getModulatedParam(id, 'snareTone', params.snareTone ?? 0.5, 0, 1), 0, 1);
     const snappy = clampValue(params.snareSnappy ?? 0.6, 0, 1);
 
     const gainTime = decay * 0.2;
@@ -105,14 +107,14 @@ export function scheduleSnare(params, when, ctx) {
     }
 }
 
-export function scheduleHat(params, when, ctx) {
+export function scheduleHat(id, params, when, ctx) {
     const buffer = createNoiseBuffer(ctx);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
 
-    const tone = clampValue(params.hatTone ?? params.tone ?? 0.5, 0, 1);
+    const tone = clampValue(getModulatedParam(id, 'hatTone', params.hatTone ?? params.tone ?? 0.5, 0, 1), 0, 1);
     const tuning = clampValue(params.hatTuning ?? 1, 0.8, 1.2);
-    const decay = clampValue(params.hatDecay ?? 0.4, 0.05, 1);
+    const decay = clampValue(getModulatedParam(id, 'hatDecay', params.hatDecay ?? 0.4, 0.05, 1), 0.05, 1);
 
     const bandpassFrequency = (5000 + tone * 7000) * tuning;
     const highpassFrequency = (2000 + tone * 4000) * tuning;
@@ -129,7 +131,7 @@ export function scheduleHat(params, when, ctx) {
     bandpass.Q.setValueAtTime(resonance, when);
 
     const gain = ctx.createGain();
-    const volume = clampValue(params.hatLevel ?? 0.6, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
+    const volume = clampValue(getModulatedParam(id, 'hatLevel', params.hatLevel ?? 0.6, 0, 1), 0, 1) * clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
     gain.gain.setValueAtTime(volume, when);
     gain.gain.exponentialRampToValueAtTime(0.0001, when + decay);
 
@@ -142,11 +144,11 @@ export function scheduleHat(params, when, ctx) {
     source.stop(when + decay + 0.03);
 }
 
-export function scheduleClap(params, when, ctx) {
-    const volume = clampValue(params.clapLevel ?? 0.6, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
+export function scheduleClap(id, params, when, ctx) {
+    const volume = clampValue(getModulatedParam(id, 'clapLevel', params.clapLevel ?? 0.6, 0, 1), 0, 1) * clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
     const spread = clampValue(params.clapSpread ?? 0.4, 0, 1);
     const reverb = clampValue(params.clapReverb ?? 0.35, 0, 1);
-    const decay = clampValue(params.clapDecay ?? 0.8, 0.1, 1.5);
+    const decay = clampValue(getModulatedParam(id, 'clapDecay', params.clapDecay ?? 0.8, 0.1, 1.5), 0.1, 1.5);
 
     const gainTime = 0.05 + decay * 0.25;
     const spreadMs = spread * 0.018;
@@ -201,14 +203,14 @@ export function scheduleClap(params, when, ctx) {
     }
 }
 
-export function scheduleOpenHat(params, when, ctx) {
+export function scheduleOpenHat(id, params, when, ctx) {
     const buffer = createNoiseBuffer(ctx);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
 
-    const tone = clampValue(params.openhatTone ?? params.hatTone ?? params.tone ?? 0.5, 0, 1);
+    const tone = clampValue(getModulatedParam(id, 'openhatTone', params.openhatTone ?? params.hatTone ?? params.tone ?? 0.5, 0, 1), 0, 1);
     const tuning = clampValue(params.openhatTuning ?? params.hatTuning ?? 1, 0.8, 1.2);
-    const decay = clampValue(params.openhatDecay ?? 0.6, 0.1, 2);
+    const decay = clampValue(getModulatedParam(id, 'openhatDecay', params.openhatDecay ?? 0.6, 0.1, 2), 0.1, 2);
 
     const bandpassFrequency = (5000 + tone * 7000) * tuning;
     const highpassFrequency = (2000 + tone * 4000) * tuning;
@@ -225,7 +227,7 @@ export function scheduleOpenHat(params, when, ctx) {
     bandpass.Q.setValueAtTime(resonance, when);
 
     const gain = ctx.createGain();
-    const volume = clampValue(params.openhatLevel ?? 0.6, 0, 1) * clampValue(params.volume ?? 0.8, 0, 1);
+    const volume = clampValue(getModulatedParam(id, 'openhatLevel', params.openhatLevel ?? 0.6, 0, 1), 0, 1) * clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
     gain.gain.setValueAtTime(volume, when);
     gain.gain.exponentialRampToValueAtTime(0.0001, when + decay);
 

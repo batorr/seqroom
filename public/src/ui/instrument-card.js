@@ -1887,6 +1887,13 @@ export function renderParamControls(container, instrument, definition) {
     paramDefs.forEach((paramDef) => {
         const control = document.createElement('div');
         control.className = 'param-control';
+        control.dataset.instrumentId = instrument.id;
+        control.dataset.paramKey = paramDef.key;
+        if (paramDef.type === 'range') {
+            control.dataset.paramMin = String(paramDef.min);
+            control.dataset.paramMax = String(paramDef.max);
+            control.dataset.paramLabel = paramDef.label;
+        }
 
         const label = document.createElement('label');
         label.htmlFor = `${instrument.id}-${paramDef.key}`;

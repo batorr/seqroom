@@ -25,6 +25,7 @@ import { setupTempoControls, updateTempoDisplay } from './ui/tempo-controls.js';
 // Import socket module
 import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls, attemptAutoJoinFromInvite } from './socket/main.js';
 import { setupDisplayNameControls } from './ui/display-name.js';
+import { initLFOPanel } from './ui/lfo-card.js';
 
 // Initialize application
 export function initialize() {
@@ -38,6 +39,7 @@ export function initialize() {
     setupAboutModal();
     setupDisplayNameControls();
     primeAudioUnlock();
+    initLFOPanel();
 
     // Setup socket events
     setupSocketEvents();
