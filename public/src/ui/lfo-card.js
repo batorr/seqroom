@@ -338,9 +338,17 @@ function buildTargets(lfo, isMappingThis) {
 }
 
 function drawCanvas(canvas, lfo) {
+    const dpr = window.devicePixelRatio || 1;
+    const displayW = canvas.offsetWidth;
+    const displayH = canvas.offsetHeight;
+    if (displayW > 0 && canvas.width !== Math.round(displayW * dpr)) {
+        canvas.width = Math.round(displayW * dpr);
+        canvas.height = Math.round(displayH * dpr);
+    }
     const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = displayW || canvas.width / dpr;
+    const H = displayH || canvas.height / dpr;
     const pad = 5;
 
     ctx.clearRect(0, 0, W, H);
