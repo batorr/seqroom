@@ -196,6 +196,27 @@ export function getVisibleStepSlots(stepCount) {
     return rows * STEP_GRID_COLUMNS;
 }
 
+function _areAllStepsFilled(instrument, stepCount, activeDrum, activeSamplerSlot) {
+    const steps = instrument.steps;
+    if (!Array.isArray(steps)) return false;
+    if (instrument.type === SynthTypes.TR808) {
+        const drum = activeDrum || 'kick';
+        for (let i = 0; i < stepCount; i++) {
+            if (!steps[i]?.layers?.[drum]) return false;
+        }
+    } else if (instrument.type === SynthTypes.SAMPLER) {
+        const slot = activeSamplerSlot || SAMPLER_SLOT_IDS[0];
+        for (let i = 0; i < stepCount; i++) {
+            if (!steps[i]?.slots?.[slot]) return false;
+        }
+    } else {
+        for (let i = 0; i < stepCount; i++) {
+            if (!steps[i]?.active) return false;
+        }
+    }
+    return true;
+}
+
 export function formatStepIndex(index, visibleTotal) {
     const padWidth = visibleTotal >= 100 ? 3 : 2;
     return String(index + 1).padStart(padWidth, '0');
@@ -890,6 +911,7 @@ export function ensureInstrumentCard(instrument) {
         renameInput: null,
         removeButton: removeBtn,
         lockButton: null,
+        fillButton: null,
         isCollapsed: false,
     };
 
@@ -955,6 +977,75 @@ export function ensureInstrumentCard(instrument) {
 
     stepControl.append(stepLabel, stepSlider, stepNumberInput, stepValue, presetContainer);
     controlsRow.appendChild(stepControl);
+
+    const stepActionButtons = document.createElement('div');
+    stepActionButtons.className = 'step-action-buttons';
+
+    const fillBtn = document.createElement('button');
+    fillBtn.type = 'button';
+    fillBtn.className = 'step-action-button';
+    fillBtn.textContent = 'Fill';
+    fillBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const instr = state.instruments.get(instrumentId);
+        if (!instr || !socket) return;
+        const count = getCurrentStepCount();
+        const clearing = _areAllStepsFilled(instr, count, cardEntry.activeDrum, cardEntry.activeSamplerSlot);
+        if (instr.type === SynthTypes.TR808) {
+            const drum = cardEntry.activeDrum || 'kick';
+            for (let i = 0; i < count; i++) {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: !clearing });
+            }
+        } else if (instr.type === SynthTypes.SAMPLER) {
+            const slot = cardEntry.activeSamplerSlot || SAMPLER_SLOT_IDS[0];
+            for (let i = 0; i < count; i++) {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, slot, value: !clearing });
+            }
+        } else {
+            const defaultPitch = instr.type === SynthTypes.TB303 ? 'C2' : instr.type === SynthTypes.POLY ? 'C4' : 'C3';
+            for (let i = 0; i < count; i++) {
+                const step = clearing ? { active: false, pitch: defaultPitch } : { active: true };
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            }
+        }
+        fillBtn.textContent = clearing ? 'Fill' : 'Clear';
+    });
+    cardEntry.fillButton = fillBtn;
+
+    const randomBtn = document.createElement('button');
+    randomBtn.type = 'button';
+    randomBtn.className = 'step-action-button';
+    randomBtn.textContent = 'Random';
+    randomBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const instr = state.instruments.get(instrumentId);
+        if (!instr || !socket) return;
+        const count = getCurrentStepCount();
+        const randomNotes = instr.type === SynthTypes.POLY ? NOTE_OPTIONS.slice(12, 48) : NOTE_OPTIONS.slice(12, 36); // Poly: C2-B4, others: C2-B3
+        if (instr.type === SynthTypes.TR808) {
+            const drums = TR808_DRUMS.map(d => d.id);
+            for (let i = 0; i < count; i++) {
+                drums.forEach(drum => {
+                    socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: Math.random() < 0.3 });
+                });
+            }
+        } else if (instr.type === SynthTypes.SAMPLER) {
+            for (let i = 0; i < count; i++) {
+                SAMPLER_SLOT_IDS.forEach(slot => {
+                    socket.emit('instrument:step', { instrumentId, stepIndex: i, slot, value: Math.random() < 0.3 });
+                });
+            }
+        } else {
+            for (let i = 0; i < count; i++) {
+                const active = Math.random() < 0.5;
+                const pitch = randomNotes[Math.floor(Math.random() * randomNotes.length)];
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step: { active, pitch } });
+            }
+        }
+    });
+
+    stepActionButtons.append(fillBtn, randomBtn);
+    controlsRow.appendChild(stepActionButtons);
 
     if (cardEntry.paramsContainer) {
         const parent = cardEntry.paramsContainer.parentElement || node;
@@ -1304,6 +1395,12 @@ export function updateInstrumentCard(card, instrument) {
         if (entry.stepControl.manualEditing) {
             entry.stepControl.manualEditing.editing = false;
         }
+    }
+
+    if (entry.fillButton) {
+        const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+        const allFilled = _areAllStepsFilled(instrument, stepCount, entry.activeDrum, entry.activeSamplerSlot);
+        entry.fillButton.textContent = allFilled ? 'Clear' : 'Fill';
     }
 
     if (entry.drumSelector) {

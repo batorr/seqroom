@@ -1169,6 +1169,27 @@
         color: var(--surface-0);
       }
 
+      .step-action-buttons { display: flex; gap: 6px; margin-left: auto; }
+
+      .step-action-button {
+        padding: 4px 10px;
+        border-radius: var(--r-full);
+        border: 1px solid var(--border);
+        background: var(--surface-1);
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      }
+
+      .step-action-button:hover {
+        background: var(--indigo-faint);
+        border-color: var(--indigo-focus);
+        color: var(--text-primary);
+      }
+
       /* ─── Params ─────────────────────────────────────────────────────── */
       .synth-params {
         display: grid;
