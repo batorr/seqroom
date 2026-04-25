@@ -74,7 +74,7 @@ export function setupLFOSocketEvents(socket) {
     });
 }
 
-const CYCLES = 2; // cycles shown in canvas
+const CYCLES = 12; // cycles shown in canvas
 
 let _lfoListEl = null;
 
@@ -181,7 +181,7 @@ function buildCard(lfo) {
     canvas.className = 'lfo-canvas';
     canvas.id = `lfo-canvas-${lfo.id}`;
     canvas.width = 300;
-    canvas.height = 48;
+    canvas.height = 96;
     drawCanvas(canvas, lfo);
 
     // ── Controls
@@ -381,7 +381,7 @@ function drawCanvas(canvas, lfo) {
         }
     } else {
         for (let px = 0; px <= W; px++) {
-            const phase = (px / W) * CYCLES;
+            const phase = (px / W) * CYCLES + lfo._phase;
             let val = waveformAt(lfo.waveform, lfo.shape, phase + lfo.phase);
             if (lfo.steps >= 2) {
                 const stepSize = 2 / lfo.steps;
@@ -394,11 +394,4 @@ function drawCanvas(canvas, lfo) {
     }
     ctx.stroke();
 
-    // Current position dot
-    const dotX = ((lfo._phase % CYCLES) / CYCLES) * W;
-    const dotY = H / 2 - lfo._out * (H / 2 - pad);
-    ctx.fillStyle = '#c7d2fe';
-    ctx.beginPath();
-    ctx.arc(dotX, dotY, 3.5, 0, Math.PI * 2);
-    ctx.fill();
 }

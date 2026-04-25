@@ -48,6 +48,20 @@ function _stopClock() {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
 }
 
+export function syncLFOClock() {
+    const playing = Boolean(state.transport?.playing);
+    if (playing && lfos.size > 0) {
+        lfos.forEach(lfo => {
+            if (lfo.jitter > 0) lfo._phase = 0;
+            lfo._sahInit = false;
+            lfo._sahHistory = [];
+        });
+        _startClock();
+    } else {
+        _stopClock();
+    }
+}
+
 export function waveformAt(type, shape, p) {
     const phase = ((p % 1) + 1) % 1;
     switch (type) {
@@ -79,11 +93,17 @@ export function waveformAt(type, shape, p) {
 
 function _tick(dt) {
     const bpm = state.transport?.bpm ?? 120;
+    const sessionStartTime = state.transport?.sessionStartTime;
+    const elapsedSec = sessionStartTime ? Math.max(0, (Date.now() - sessionStartTime) / 1000) : 0;
     lfos.forEach(lfo => {
         const rateHz = (bpm / 60) / lfo.division;
-        const jFactor = lfo.jitter > 0 ? 1 + lfo.jitter * (Math.random() - 0.5) * 0.5 : 1;
         const prevPhase = lfo._phase;
-        lfo._phase += rateHz * jFactor * dt;
+        if (lfo.jitter > 0) {
+            const jFactor = 1 + lfo.jitter * (Math.random() - 0.5) * 0.5;
+            lfo._phase += rateHz * jFactor * dt;
+        } else {
+            lfo._phase = rateHz * elapsedSec;
+        }
 
         let raw;
         if (lfo.waveform === 'sah') {
@@ -136,7 +156,7 @@ export function registerLFOFromServer(lfoData) {
         _phase: 0, _out: 0, _sahValue: 0, _sahInit: false, _sahHistory: [],
     };
     lfos.set(lfo.id, lfo);
-    _startClock();
+    if (state.transport?.playing) _startClock();
     return lfo;
 }
 
@@ -161,7 +181,7 @@ export function hydrateServerLFOs(lfosData) {
     lfos.clear();
     if (_mappingLFOId) setMappingLFO(null);
     (lfosData || []).forEach(d => registerLFOFromServer(d));
-    if (lfos.size > 0) _startClock(); else _stopClock();
+    if (lfos.size > 0 && state.transport?.playing) _startClock(); else _stopClock();
 }
 
 export function getLFOs() { return lfos; }
