@@ -1707,7 +1707,7 @@ function createRoomState({
     graceUsed: false,
   };
 
-  const defaultInstrument = createInstrument(SynthTypes.SIMPLE, {
+  const defaultInstrument = createInstrument(SynthTypes.TB303, {
     creatorUserId,
     creatorDisplayName,
   });
