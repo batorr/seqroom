@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const STEP_COUNT = 16;
 const STEP_COUNT_MIN = 1;
 const STEP_COUNT_MAX = 128;
-const DEFAULT_TEMPO = 120;
+const DEFAULT_TEMPO = 140;
 const SESSION_START_DELAY_MS = 2000;
 const SYNC_INTERVAL_MS = 2000;
 const TEMPO_MIN = 30;
@@ -28,7 +28,7 @@ const INVITE_TOKEN_HEADER_SEGMENT = base64UrlEncode(Buffer.from(JSON.stringify(I
 
 const SynthTypes = Object.freeze({
   TB303: 'tb-303',
-  TR808: 'tr-808',
+  DRUMS: 'drum-kit',
   SIMPLE: 'poly-synth',
   SAMPLER: 'sampler',
 });
@@ -37,73 +37,6 @@ const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
 const INSTRUMENT_NAME_MAX_LENGTH = 48;
 const DISPLAY_NAME_MAX_LENGTH = 32;
-
-const TR808_PARAM_SCHEMA = {
-  master: {
-    volume: { min: 0, max: 1 },
-    accentLevel: { min: 0, max: 1 },
-    swing: { min: 0, max: 1 },
-    drive: { min: 0, max: 1 },
-  },
-  kick: {
-    level: { min: 0, max: 1 },
-    decay: { min: 0.1, max: 2 },
-    tone: { min: 30, max: 100 },
-    drive: { min: 0, max: 1 },
-  },
-  snare: {
-    level: { min: 0, max: 1 },
-    tone: { min: 0, max: 1 },
-    snappy: { min: 0, max: 1 },
-    decay: { min: 0.1, max: 1.5 },
-  },
-  hat: {
-    level: { min: 0, max: 1 },
-    decay: { min: 0.05, max: 1 },
-    tone: { min: 0, max: 1 },
-    tuning: { min: 0.8, max: 1.2 },
-  },
-  openhat: {
-    level: { min: 0, max: 1 },
-    decay: { min: 0.1, max: 2 },
-    tone: { min: 0, max: 1 },
-    tuning: { min: 0.8, max: 1.2 },
-  },
-  clap: {
-    level: { min: 0, max: 1 },
-    spread: { min: 0, max: 1 },
-    reverb: { min: 0, max: 1 },
-    decay: { min: 0.1, max: 1.5 },
-  },
-};
-
-const TR808_LEGACY_PARAM_MAP = {
-  volume: ['master', 'volume'],
-  accentLevel: ['master', 'accentLevel'],
-  swing: ['master', 'swing'],
-  masterDrive: ['master', 'drive'],
-  kickLevel: ['kick', 'level'],
-  kickDecay: ['kick', 'decay'],
-  kickTone: ['kick', 'tone'],
-  kickDrive: ['kick', 'drive'],
-  snareLevel: ['snare', 'level'],
-  snareTone: ['snare', 'tone'],
-  snareSnappy: ['snare', 'snappy'],
-  snareDecay: ['snare', 'decay'],
-  hatLevel: ['hat', 'level'],
-  hatDecay: ['hat', 'decay'],
-  hatTone: ['hat', 'tone'],
-  hatTuning: ['hat', 'tuning'],
-  tone: ['hat', 'tone'],
-  openhatLevel: ['openhat', 'level'],
-  openhatDecay: ['openhat', 'decay'],
-  openhatTone: ['openhat', 'tone'],
-  openhatTuning: ['openhat', 'tuning'],
-  clapLevel: ['clap', 'level'],
-  clapSpread: ['clap', 'spread'],
-  clapReverb: ['clap', 'reverb'],
-  clapDecay: ['clap', 'decay'],
-};
 
 function clampStepCount(value) {
   const numeric = Number(value);
@@ -125,8 +58,8 @@ function defaultInstrumentName(type) {
   switch (type) {
     case SynthTypes.TB303:
       return 'Acid Bass';
-    case SynthTypes.TR808:
-      return '808 Drums';
+    case SynthTypes.DRUMS:
+      return 'Rave Kit';
     case SynthTypes.SIMPLE:
       return 'Poly Synth';
     case SynthTypes.SAMPLER:
@@ -171,52 +104,19 @@ function createDefaultParams(type) {
   switch (type) {
     case SynthTypes.TB303:
       return {
+        // Acid techno: distorted, squelchy, a touch of echo.
         volume: 0.8,
-        cutoff: 0.5,
-        resonance: 0.7,
-        envelopeMod: 0.6,
-        decay: 0.4,
+        cutoff: 0.4,
+        resonance: 0.8,
+        envelopeMod: 0.65,
+        decay: 0.3,
+        drive: 0.55,
+        delay: 0.15,
+        reverb: 0.08,
         waveform: 'sawtooth',
       };
-    case SynthTypes.TR808:
-      return {
-        master: {
-          volume: 0.9,
-          accentLevel: 0.6,
-          swing: 0,
-          drive: 0.15,
-        },
-        kick: {
-          level: 0.9,
-          decay: 0.8,
-          tone: 60,
-          drive: 0.2,
-        },
-        snare: {
-          level: 0.7,
-          snappy: 0.6,
-          tone: 0.5,
-          decay: 0.7,
-        },
-        hat: {
-          level: 0.6,
-          decay: 0.4,
-          tone: 0.5,
-          tuning: 1,
-        },
-        openhat: {
-          level: 0.6,
-          decay: 0.6,
-          tone: 0.5,
-          tuning: 1,
-        },
-        clap: {
-          level: 0.6,
-          spread: 0.4,
-          reverb: 0.35,
-          decay: 0.8,
-        },
-      };
+    case SynthTypes.DRUMS:
+      return drumKit.normalizeDrumParams({});
     case SynthTypes.SAMPLER:
       return {
         slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
@@ -233,6 +133,8 @@ function createDefaultParams(type) {
         release: 0.4,
         cutoff: 0.6,
         resonance: 0.3,
+        delay: 0,
+        reverb: 0.2,
         waveform: 'sine',
       };
   }
@@ -254,16 +156,10 @@ function createDefaultSamplerSlot(slotId) {
 }
 
 function createStepTemplate(type) {
-  if (type === SynthTypes.TR808) {
+  if (type === SynthTypes.DRUMS) {
     return {
       active: false,
-      layers: {
-        kick: false,
-        snare: false,
-        hat: false,
-        openhat: false,
-        clap: false,
-      },
+      layers: drumKit.createDrumLayers(),
     };
   }
 
@@ -314,9 +210,6 @@ function createInstrument(type, options = {}) {
     creatorDisplayName: normalizedCreatorDisplayName || null,
   };
 
-  if (type === SynthTypes.TR808) {
-    instrument.params = deepCloneTR808Params(instrument.params);
-  }
   if (type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
   }
@@ -374,26 +267,6 @@ function createStepSequence(type, length) {
   return Array.from({ length: targetLength }, () => createStepTemplate(type));
 }
 
-function deepCloneTR808Params(params = {}) {
-  const defaults = createDefaultParams(SynthTypes.TR808);
-  const clone = {};
-  for (const group of Object.keys(TR808_PARAM_SCHEMA)) {
-    const sourceGroup = params[group] || defaults[group] || {};
-    clone[group] = {};
-    for (const [key, range] of Object.entries(TR808_PARAM_SCHEMA[group])) {
-      const fallback = defaults[group]?.[key];
-      const value = sourceGroup[key];
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        clone[group][key] = clamp(value, range.min, range.max);
-      } else {
-        clone[group][key] = clamp(typeof fallback === 'number' ? fallback : (range.min + range.max) / 2, range.min, range.max);
-      }
-    }
-  }
-  applyTR808LegacyAliases(clone);
-  return clone;
-}
-
 function deepCloneSamplerParams(params = {}) {
   const clone = { slots: {} };
   for (const slotId of SAMPLER_SLOT_IDS) {
@@ -421,8 +294,8 @@ function deepCloneSamplerParams(params = {}) {
 }
 
 function cloneInstrument(instrument) {
-  if (instrument.type === SynthTypes.TR808) {
-    instrument.params = deepCloneTR808Params(instrument.params);
+  if (instrument.type === SynthTypes.DRUMS) {
+    instrument.params = drumKit.normalizeDrumParams(instrument.params);
   }
   if (instrument.type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
@@ -469,8 +342,9 @@ function cloneInstrument(instrument) {
         slots: step.slots ? { ...step.slots } : undefined,
       };
 
-      if (instrument.type === SynthTypes.TR808) {
+      if (instrument.type === SynthTypes.DRUMS) {
         ensureDrumLayers(clonedStep);
+        clonedStep.active = Object.values(clonedStep.layers).some(Boolean);
       }
 
       if (instrument.type === SynthTypes.SAMPLER) {
@@ -486,8 +360,8 @@ function cloneInstrument(instrument) {
     }),
   };
 
-  if (instrument.type === SynthTypes.TR808) {
-    base.params = deepCloneTR808Params(instrument.params);
+  if (instrument.type === SynthTypes.DRUMS) {
+    base.params = drumKit.normalizeDrumParams(instrument.params);
   } else if (instrument.type === SynthTypes.SAMPLER) {
     base.params = deepCloneSamplerParams(instrument.params);
   } else {
@@ -629,12 +503,9 @@ function clamp(value, min, max) {
 }
 
 function applyInstrumentParams(instrument, params = {}) {
-  if (instrument.type === SynthTypes.TR808) {
-    ensureTR808ParamStructure(instrument);
-    const changed = applyTR808ParamUpdates(instrument.params, params);
-    if (changed) {
-      instrument.params = deepCloneTR808Params(instrument.params);
-    }
+  if (instrument.type === SynthTypes.DRUMS) {
+    instrument.params = drumKit.normalizeDrumParams(instrument.params);
+    drumKit.applyDrumParamUpdates(instrument.params, params);
     return;
   }
 
@@ -668,14 +539,15 @@ function applyInstrumentParams(instrument, params = {}) {
   }
 }
 
+// Exactly one boolean per Rave Kit voice.
 function ensureDrumLayers(step) {
-  step.layers = step.layers || {};
-  if (typeof step.layers.kick !== 'boolean') step.layers.kick = false;
-  if (typeof step.layers.snare !== 'boolean') step.layers.snare = false;
-  if (typeof step.layers.hat !== 'boolean') step.layers.hat = false;
-  if (typeof step.layers.openhat !== 'boolean') step.layers.openhat = false;
-  if (typeof step.layers.clap !== 'boolean') step.layers.clap = false;
-  return step.layers;
+  const current = step.layers && typeof step.layers === 'object' ? step.layers : {};
+  const layers = drumKit.createDrumLayers();
+  for (const id of drumKit.DRUM_VOICE_IDS) {
+    layers[id] = current[id] === true;
+  }
+  step.layers = layers;
+  return layers;
 }
 
 function ensureSamplerStepSlots(step) {
@@ -695,13 +567,6 @@ function ensureSamplerStepSlots(step) {
   return step.slots;
 }
 
-function ensureTR808ParamStructure(instrument) {
-  if (instrument.type !== SynthTypes.TR808) {
-    return;
-  }
-  instrument.params = deepCloneTR808Params(instrument.params || {});
-}
-
 function ensureSamplerParamStructure(instrument) {
   if (instrument.type !== SynthTypes.SAMPLER) {
     return;
@@ -714,49 +579,6 @@ function ensureSamplerParamStructure(instrument) {
     nextParams.slots[slotId] = mergeSamplerSlot(base, existing, { allowExistingSample: true });
   }
   instrument.params = nextParams;
-}
-
-function applyTR808ParamUpdates(current, updates = {}) {
-  if (!updates || typeof updates !== 'object') {
-    return false;
-  }
-
-  let changed = false;
-
-  for (const [groupKey, value] of Object.entries(updates)) {
-    if (TR808_PARAM_SCHEMA[groupKey] && value && typeof value === 'object') {
-      const groupSchema = TR808_PARAM_SCHEMA[groupKey];
-      const targetGroup = current[groupKey];
-      for (const [paramKey, paramValue] of Object.entries(value)) {
-        if (!groupSchema[paramKey] || typeof paramValue !== 'number' || !Number.isFinite(paramValue)) {
-          continue;
-        }
-        const { min, max } = groupSchema[paramKey];
-        const clamped = clamp(paramValue, min, max);
-        if (targetGroup[paramKey] !== clamped) {
-          targetGroup[paramKey] = clamped;
-          changed = true;
-        }
-      }
-      continue;
-    }
-
-    const legacyTarget = TR808_LEGACY_PARAM_MAP[groupKey];
-    if (legacyTarget && typeof value === 'number' && Number.isFinite(value)) {
-      const [group, param] = legacyTarget;
-      const schema = TR808_PARAM_SCHEMA[group]?.[param];
-      if (!schema) {
-        continue;
-      }
-      const clamped = clamp(value, schema.min, schema.max);
-      if (current[group][param] !== clamped) {
-        current[group][param] = clamped;
-        changed = true;
-      }
-    }
-  }
-
-  return changed;
 }
 
 function applySamplerParamUpdates(instrument, updates = {}) {
@@ -787,39 +609,6 @@ function applySamplerParamUpdates(instrument, updates = {}) {
   }
 
   return changed;
-}
-
-function applyTR808LegacyAliases(target) {
-  target.volume = target.master.volume;
-  target.accentLevel = target.master.accentLevel;
-  target.swing = target.master.swing;
-  target.masterDrive = target.master.drive;
-
-  target.kickLevel = target.kick.level;
-  target.kickDecay = target.kick.decay;
-  target.kickTone = target.kick.tone;
-  target.kickDrive = target.kick.drive;
-
-  target.snareLevel = target.snare.level;
-  target.snareTone = target.snare.tone;
-  target.snareSnappy = target.snare.snappy;
-  target.snareDecay = target.snare.decay;
-
-  target.hatLevel = target.hat.level;
-  target.hatDecay = target.hat.decay;
-  target.hatTone = target.hat.tone;
-  target.hatTuning = target.hat.tuning;
-  target.tone = target.hat.tone;
-
-  target.openhatLevel = target.openhat.level;
-  target.openhatDecay = target.openhat.decay;
-  target.openhatTone = target.openhat.tone;
-  target.openhatTuning = target.openhat.tuning;
-
-  target.clapLevel = target.clap.level;
-  target.clapSpread = target.clap.spread;
-  target.clapReverb = target.clap.reverb;
-  target.clapDecay = target.clap.decay;
 }
 
 function normalizeSamplerSlotId(slotId) {
@@ -1099,6 +888,7 @@ const roomEmptyTimers = new Map();
 let lastPingId = 0;
 // Set from public/src/shared/timeline.js before the server starts listening.
 let timeline = null;
+let drumKit = null;
 
 const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
 
@@ -1143,7 +933,8 @@ const rateLimiters = {
   roomCreate:      new RateLimiterMemory({ points: 5,   duration: 60 }),
   joinWithInvite:  new RateLimiterMemory({ points: 10,  duration: 60 }),
   instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),
-  instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),
+  // Live knob tweaking is the point of an acid set; clients throttle to ~20/s.
+  instrumentParam: new RateLimiterMemory({ points: 1500, duration: 60 }),
   instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),
   tempoSet:        new RateLimiterMemory({ points: 600, duration: 60 }),
   lfoAdd:          new RateLimiterMemory({ points: 20,  duration: 60 }),
@@ -1556,7 +1347,7 @@ io.on('connection', (socket) => {
     ensureInstrumentStepCapacity(instrument, Math.max(activeStepCount, normalizedIndex + 1));
     const targetStep = instrument.steps[normalizedIndex];
 
-    if (instrument.type === SynthTypes.TR808 && typeof drum === 'string') {
+    if (instrument.type === SynthTypes.DRUMS && typeof drum === 'string') {
       const layers = ensureDrumLayers(targetStep);
       const normalizedDrum = drum.toLowerCase();
       if (!(normalizedDrum in layers)) {
@@ -2033,17 +1824,19 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline is an ES module shared with the browser, so it is
-// loaded before the server starts accepting connections.
-import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', 'timeline.js')).href)
-  .then((module) => {
-    timeline = module;
+// The transport timeline and the drum kit schema are ES modules shared with
+// the browser, so they are loaded before the server accepts connections.
+const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js')])
+  .then(([timelineModule, drumKitModule]) => {
+    timeline = timelineModule;
+    drumKit = drumKitModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);
       logLocalAddresses();
     });
   })
   .catch((error) => {
-    console.error('Failed to load the transport timeline module:', error);
+    console.error('Failed to load the shared modules:', error);
     process.exit(1);
   });

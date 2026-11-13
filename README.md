@@ -16,7 +16,8 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 
 ## Features
 - Real-time collaboration through Socket.IO rooms
-- TB-303, TR-808, Poly Synth, and Sampler instruments (sampler exposes six slots with per-slot gain/pan/pitch/start/end/reverse controls)
+- Acid Bass (TB-303 style, with accent, slide, drive, delay and reverb), Rave Kit (synthesised drums voiced for acid techno: kick, snare, clap, rim, closed/open hat, ride), Poly Synth, and Sampler (six slots with per-slot gain/pan/pitch/start/end/reverse controls)
+- A mix bus with glue compression, a limiter, a tempo-synced delay and a room reverb
 - Step counts per instrument from 1 to 128 (default 16) and per-step drum/sampler layers
 - Tempo range 30–300 BPM with numeric input and slider, plus transport controls shared by every client
 - A shared score: every instrument is a row of lanes on the same 16-column grid, with the selected instrument's sound settings below it
@@ -32,8 +33,8 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 6. Use **Leave Room** to return to the landing page.
 
 ## Working With The Sequencer
-- **Adding instruments**: Select TB-303, TR-808, Poly Synth, or Sampler from the synth modal. Instrument cards appear in the order they were created; drag ordering is handled server-side when card reorder buttons are used.
-- **Editing steps**: Melodic instruments expose per-step note buttons and pitch pickers, TR-808 shows five drum layers per column (kick, snare, hat, open hat, clap), and the sampler shows six slot toggles. Every edit emits a Socket.IO event so the server can broadcast the normalized pattern.
+- **Adding instruments**: Select Acid Bass, Rave Kit, Poly Synth, or Sampler from the add-instrument dialog. Instrument cards appear in the order they were created; drag ordering is handled server-side when card reorder buttons are used.
+- **Editing steps**: Melodic instruments expose per-step note buttons and pitch pickers, the Rave Kit shows one lane per drum voice (kick, snare, clap, rim, closed hat, open hat, ride), and the sampler shows six slot toggles. Every edit emits a Socket.IO event so the server can broadcast the normalized pattern.
 - **Parameters**: Each card exposes sliders (volume, filter, envelopes, drum levels) plus sampler slot editors for gain/pan/pitch/start/end/reverse. Changes sync immediately after the server validates them.
 - **Tempo & transport**: Use the slider or numeric input to set BPM (30–300). Play/Stop toggles transport for everyone in the room. The sync banner displays clock offset and round-trip time after the ping/pong handshake stabilizes.
 - **Sampler uploads**: Drag audio files (<= 5 MB, WAV/MP3) onto a sampler slot. The client base64-encodes the file, the server validates and rebroadcasts it, and every client decodes the buffer for playback.

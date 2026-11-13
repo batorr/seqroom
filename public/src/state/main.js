@@ -3,7 +3,7 @@
 
 import { DEFAULT_BPM } from '../constants/audio.js';
 import { STEP_COUNT } from '../constants/ui.js';
-import { SynthTypes, TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
+import { SynthTypes, DRUM_VOICES, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
     clampTempo,
@@ -188,14 +188,14 @@ export function normalizeInstrument(instrument) {
     const normalizedStepCount = clampStepCount(instrument.stepCount ?? rawSteps.length ?? STEP_COUNT);
 
     const normalizedSteps = rawSteps.map((step) => {
-        if (instrument.type === SynthTypes.TR808) {
+        if (instrument.type === SynthTypes.DRUMS) {
             const base = createEmptyDrumStep();
             const layers = { ...base.layers, ...(step?.layers || {}) };
             return {
                 ...base,
                 ...step,
                 layers,
-                active: TR808_DRUMS.some((drum) => layers[drum.id]),
+                active: DRUM_VOICES.some((drum) => layers[drum.id]),
             };
         }
         if (instrument.type === SynthTypes.SAMPLER) {
@@ -207,7 +207,7 @@ export function normalizeInstrument(instrument) {
     });
 
     while (normalizedSteps.length < normalizedStepCount) {
-        const template = instrument.type === SynthTypes.TR808
+        const template = instrument.type === SynthTypes.DRUMS
             ? createEmptyDrumStep()
             : instrument.type === SynthTypes.SAMPLER
                 ? createEmptySamplerStep()
@@ -322,7 +322,7 @@ export function ensureLocalInstrumentCapacity(instrument, stepCount) {
     }
     while (instrument.steps.length < desired) {
         let template;
-        if (instrument.type === SynthTypes.TR808) {
+        if (instrument.type === SynthTypes.DRUMS) {
             template = createEmptyDrumStep();
         } else if (instrument.type === SynthTypes.SAMPLER) {
             template = createEmptySamplerStep();

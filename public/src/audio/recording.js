@@ -33,7 +33,7 @@ export async function startRecording() {
     }
 
     const ctx = ensureAudioContext();
-    if (!ctx || !audioState.masterGain) {
+    if (!ctx || !audioState.masterOutput) {
         window.alert('Audio engine is not ready yet.');
         return;
     }
@@ -82,7 +82,7 @@ export async function startRecording() {
     };
 
     try {
-        audioState.masterGain.connect(recorderNode);
+        audioState.masterOutput.connect(recorderNode);
     } catch (error) {
         console.error('Failed to connect recording node:', error);
         recorderNode.port.onmessage = null;
@@ -106,7 +106,7 @@ export function stopRecording(options = {}) {
 
     if (recorderNode) {
         try {
-            audioState.masterGain?.disconnect(recorderNode);
+            audioState.masterOutput?.disconnect(recorderNode);
         } catch (error) {
             console.warn('Failed to disconnect recording node:', error);
         }

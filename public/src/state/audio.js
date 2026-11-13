@@ -4,7 +4,10 @@
 // Audio context and scheduling state
 export const audioState = {
     context: null,
+    // Instruments play into masterGain; masterOutput is the limited mix
+    // that reaches the speakers (and the recorder).
     masterGain: null,
+    masterOutput: null,
     schedulerId: null,
     nextStepIndex: 0,
     // Server time of the last step handed to Web Audio; nothing at or before

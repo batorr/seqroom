@@ -6,6 +6,7 @@ import { audioState, socketState } from '../state/audio.js';
 import { LATENCY_SMOOTHING } from '../constants/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { createOffsetEstimator, createRollingMedian } from '../shared/clock-sync.js';
+import { createAudioGraph } from './graph.js';
 
 // Audio context initialization
 export function ensureAudioContext() {
@@ -24,12 +25,12 @@ export function ensureAudioContext() {
         }
 
         const ctx = new AudioContext();
-        const master = ctx.createGain();
-        master.gain.value = 0.8;
-        master.connect(ctx.destination);
+        // Mix bus with glue compression, limiter and the delay/reverb sends.
+        const graph = createAudioGraph(ctx);
 
         audioState.context = ctx;
-        audioState.masterGain = master;
+        audioState.masterGain = graph.input;
+        audioState.masterOutput = graph.output;
 
         // Prepare sampler audio for all existing sampler instruments
         state.instruments.forEach((instrument) => {

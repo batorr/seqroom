@@ -3,7 +3,7 @@
 // Tempo constraints
 export const TEMPO_MIN = 30;
 export const TEMPO_MAX = 300;
-export const DEFAULT_BPM = 120;
+export const DEFAULT_BPM = 140;
 
 // Clock synchronization
 export const OFFSET_SMOOTHING = 0.2;

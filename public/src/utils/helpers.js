@@ -2,7 +2,8 @@
 
 import { TEMPO_MIN, TEMPO_MAX, DEFAULT_BPM, NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_COUNT_MIN, STEP_COUNT_MAX } from '../constants/ui.js';
-import { TR808_DRUMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
+import { SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
+import { createDrumLayers } from '../shared/drum-kit.js';
 
 // Color manipulation
 export function hexToRgba(hex, alpha = 1) {
@@ -126,10 +127,7 @@ export function createEmptyMelodicStep() {
 
 export function createEmptyDrumStep() {
     return {
-        layers: TR808_DRUMS.reduce((acc, drum) => {
-            acc[drum.id] = false;
-            return acc;
-        }, {}),
+        layers: createDrumLayers(),
         active: false,
     };
 }

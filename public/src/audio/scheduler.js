@@ -22,7 +22,8 @@ import {
     contextTimeToServerTime,
 } from './main.js';
 import { scheduleTB303 } from './instruments/tb303.js';
-import { scheduleTR808 } from './instruments/tr808.js';
+import { scheduleDrums } from './instruments/drums.js';
+import { getAudioGraph } from './graph.js';
 import { scheduleSampler } from './instruments/sampler.js';
 import { schedulePolySynth } from './instruments/poly-synth.js';
 
@@ -93,6 +94,7 @@ export function runAudioScheduler() {
     }
 
     updateAudioClockMapping(ctx);
+    getAudioGraph(ctx)?.setTempo(state.transport.bpm);
     // Everything that has to start before currentTime + look-ahead is queued
     // now; in server time that window also covers the output latency.
     const horizonTime = contextTimeToServerTime(ctx, ctx.currentTime + AUDIO_SCHEDULE_AHEAD_SECONDS);
@@ -213,8 +215,8 @@ export function scheduleInstrumentStep(instrument, step, prevStep, when, stepDur
         case SynthTypes.TB303:
             scheduleTB303(instrument, step, prevStep, when, ctx, stepDuration);
             break;
-        case SynthTypes.TR808:
-            scheduleTR808(instrument, step, when, ctx);
+        case SynthTypes.DRUMS:
+            scheduleDrums(instrument, step, when, ctx);
             break;
         case SynthTypes.SAMPLER:
             scheduleSampler(instrument, step, when, ctx);

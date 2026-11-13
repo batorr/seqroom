@@ -356,7 +356,7 @@ export function setupSocketEvents() {
             return;
         }
         const instrument = state.instruments.get(targetInstrumentId);
-        if (!instrument || instrument.type === SynthTypes.TR808 || index < 0 || index >= instrument.steps.length) {
+        if (!instrument || instrument.type === SynthTypes.DRUMS || index < 0 || index >= instrument.steps.length) {
             return;
         }
         instrument.steps[index].active = Boolean(active);

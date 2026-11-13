@@ -60,8 +60,8 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 6. Use **Leave Room** to return to the landing page.
 
 ### Instruments and Steps
-- Open the synth modal to add TB-303, TR-808, Poly Synth, or Sampler instruments.
-- Each instrument is a row of the score with type-specific lanes (TB-303 accent/note/pitch/slide, poly note/pitch, one lane per TR-808 voice or sampler slot); the selected instrument's parameters show in the inspector below the score.
+- Open the add-instrument dialog to add Acid Bass, Rave Kit, Poly Synth, or Sampler instruments.
+- Each instrument is a row of the score with type-specific lanes (TB-303 accent/note/pitch/slide, poly note/pitch, one lane per Rave Kit voice or sampler slot); the selected instrument's parameters show in the inspector below the score.
 - Step counts can be set between 1 and 128 per instrument.
 - Locks prevent conflicting edits; an instrument locked by someone else shows "Locked" and its steps and parameters are disabled.
 
@@ -74,7 +74,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 - Slots expose gain, pan, pitch, start/end, and reverse controls. These values sync to the server and every client decodes the audio buffer locally.
 
 ### Recording
-- The **REC** button loads `public/recording-processor.js`, connects it to the master gain, and streams Float32 chunks back to `audio/recording.js`.
+- The **REC** button loads `public/recording-processor.js`, connects it to the limited master output, and streams Float32 chunks back to `audio/recording.js`.
 - While recording, the status label shows elapsed time and bytes captured. Stopping recording disconnects the node and downloads `seqroom_recording.wav`.
 - Recording is only available in browsers that implement `AudioWorkletNode`.
 

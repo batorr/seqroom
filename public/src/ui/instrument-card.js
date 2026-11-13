@@ -18,7 +18,7 @@ export function setInstrumentMuted(instrumentId, muted) {
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
 import { computeSlurs } from '../shared/slurs.js';
-import { SynthTypes, TR808_DRUMS, TR808_DRUM_PARAMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
+import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
@@ -209,7 +209,7 @@ export function getVisibleStepSlots(stepCount) {
 function _areAllStepsFilled(instrument, stepCount, activeDrum, activeSamplerSlot) {
     const steps = instrument.steps;
     if (!Array.isArray(steps)) return false;
-    if (instrument.type === SynthTypes.TR808) {
+    if (instrument.type === SynthTypes.DRUMS) {
         const drum = activeDrum || 'kick';
         for (let i = 0; i < stepCount; i++) {
             if (!steps[i]?.layers?.[drum]) return false;
@@ -582,6 +582,59 @@ function handleLockToggle(instrumentId) {
         return;
     }
     socket.emit('lockSynth', { instrumentId });
+}
+
+// Parameter changes are sent at most every 50 ms per instrument (plus the
+// final value), so sweeping a knob live stays within the server's limits.
+const PARAM_SEND_INTERVAL_MS = 50;
+const pendingParamSends = new Map();
+
+function emitInstrumentParams(instrumentId, params) {
+    let pending = pendingParamSends.get(instrumentId);
+    if (!pending) {
+        pending = { params: {}, timer: null, lastSent: -Infinity };
+        pendingParamSends.set(instrumentId, pending);
+    }
+    Object.assign(pending.params, params);
+    const flush = () => {
+        pending.timer = null;
+        pending.lastSent = performance.now();
+        const payload = pending.params;
+        pending.params = {};
+        if (socket && Object.keys(payload).length) {
+            socket.emit('instrument:param', { instrumentId, params: payload });
+        }
+    };
+    if (pending.timer) {
+        return;
+    }
+    const wait = pending.lastSent + PARAM_SEND_INTERVAL_MS - performance.now();
+    if (wait <= 0) {
+        flush();
+    } else {
+        pending.timer = setTimeout(flush, wait);
+    }
+}
+
+// Random drums for acid techno: a relentless four-on-the-floor kick, claps on
+// the backbeat, open hats on the offbeat, driving 16th hats, a running ride,
+// and the odd syncopated rim or snare.
+function randomDrumHits(stepIndex) {
+    const pos = stepIndex % 16;
+    const chance = (p) => Math.random() < p;
+    const onBeat = pos % 4 === 0;
+    const offBeat = pos % 4 === 2;
+    const backbeat = pos === 4 || pos === 12;
+    const openhat = offBeat && chance(0.85);
+    return {
+        kick: onBeat,
+        snare: backbeat ? chance(0.35) : chance(pos >= 13 ? 0.15 : 0.03),
+        clap: backbeat ? chance(0.85) : chance(0.02),
+        rim: !onBeat && chance(0.12),
+        hat: !openhat && chance(0.75),
+        openhat,
+        ride: chance(pos % 2 === 0 ? 0.45 : 0.15),
+    };
 }
 
 // Render functions
@@ -1021,7 +1074,7 @@ export function ensureInstrumentCard(instrument) {
         if (!instr || !socket) return;
         const count = getCurrentStepCount();
         const clearing = _areAllStepsFilled(instr, count, cardEntry.activeDrum, cardEntry.activeSamplerSlot);
-        if (instr.type === SynthTypes.TR808) {
+        if (instr.type === SynthTypes.DRUMS) {
             const drum = cardEntry.activeDrum || 'kick';
             for (let i = 0; i < count; i++) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: !clearing });
@@ -1056,11 +1109,14 @@ export function ensureInstrumentCard(instrument) {
         if (!instr || !socket) return;
         const count = getCurrentStepCount();
         const randomNotes = instr.type === SynthTypes.POLY ? NOTE_OPTIONS.slice(12, 48) : NOTE_OPTIONS.slice(12, 36); // Poly: C2-B4, others: C2-B3
-        if (instr.type === SynthTypes.TR808) {
-            const drums = TR808_DRUMS.map(d => d.id);
+        if (instr.type === SynthTypes.DRUMS) {
             for (let i = 0; i < count; i++) {
-                drums.forEach(drum => {
-                    socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: Math.random() < 0.3 });
+                const hits = randomDrumHits(i);
+                DRUM_VOICES.forEach(({ id: drum }) => {
+                    const current = Boolean(instr.steps?.[i]?.layers?.[drum]);
+                    if (current !== hits[drum]) {
+                        socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: hits[drum] });
+                    }
                 });
             }
         } else if (instr.type === SynthTypes.SAMPLER) {
@@ -1365,7 +1421,7 @@ export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-808', 'tone-poly', 'tone-sampler');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
@@ -1423,12 +1479,12 @@ export function updateInstrumentCard(card, instrument) {
 
     updateFillButtonLabel(entry, instrument);
 
-    if (instrument.type === SynthTypes.TR808
-        && (!entry.activeDrum || !TR808_DRUMS.some((drum) => drum.id === entry.activeDrum))) {
-        entry.activeDrum = TR808_DRUMS[0].id;
+    if (instrument.type === SynthTypes.DRUMS
+        && (!entry.activeDrum || !DRUM_VOICES.some((drum) => drum.id === entry.activeDrum))) {
+        entry.activeDrum = DRUM_VOICES[0].id;
     }
 
-    // 808 voices are picked from the score's row labels; only the sampler
+    // Drum voices are picked from the score's row labels; only the sampler
     // needs its slot strip in the inspector.
     if (entry.drumSelector) {
         if (instrument.type === SynthTypes.SAMPLER) {
@@ -1477,6 +1533,9 @@ export function removeInstrumentCard(instrumentId) {
     socketState.instrumentElements.delete(instrumentId);
     import('../audio/instruments/sampler.js').then(({ cleanupSamplerBuffers }) => {
         cleanupSamplerBuffers(instrumentId);
+    }).catch(console.error);
+    import('../audio/instruments/drums.js').then(({ releaseDrumKit }) => {
+        releaseDrumKit(instrumentId);
     }).catch(console.error);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
@@ -1985,13 +2044,13 @@ export function renderParamControls(container, instrument, definition) {
 
     let paramDefs = definition.params || [];
     let groupTitleBefore = null;
-    if (instrument.type === SynthTypes.TR808) {
+    if (instrument.type === SynthTypes.DRUMS) {
         // Instrument-wide params first, then the voice picked in the score.
         const entry = socketState.instrumentElements.get(instrument.id);
         const activeDrum = entry?.activeDrum || 'kick';
-        const drumParams = TR808_DRUM_PARAMS[activeDrum] || [];
+        const drumParams = DRUM_VOICE_PARAM_DEFS[activeDrum] || [];
         if (drumParams.length) {
-            const drumLabel = TR808_DRUMS.find((drum) => drum.id === activeDrum)?.label || activeDrum;
+            const drumLabel = DRUM_VOICES.find((drum) => drum.id === activeDrum)?.label || activeDrum;
             groupTitleBefore = { key: drumParams[0].key, title: drumLabel };
         }
         paramDefs = [...paramDefs, ...drumParams];
@@ -2064,12 +2123,8 @@ export function renderParamControls(container, instrument, definition) {
                     return;
                 }
 
-                if (!socket) return;
                 socketState.suppressedInstrumentUpdates.set(instrument.id, Date.now() + 250);
-                socket.emit('instrument:param', {
-                    instrumentId: instrument.id,
-                    params: paramsPayload,
-                });
+                emitInstrumentParams(instrument.id, paramsPayload);
             });
 
             control.appendChild(input);
@@ -2205,7 +2260,7 @@ export function renderStepGrid(container, instrument) {
     if (activePitchPopup) {
         closePitchPopup({ commit: false });
     }
-    if (instrument.type === SynthTypes.TR808) {
+    if (instrument.type === SynthTypes.DRUMS) {
         renderDrumStepGrid(container, instrument);
     } else if (instrument.type === SynthTypes.SAMPLER) {
         renderSamplerStepGrid(container, instrument);
@@ -2433,7 +2488,7 @@ function drawSlurs(layers, steps, count) {
     });
 }
 
-// Shared by the 808 (one lane per drum voice) and the sampler (one lane per
+// Shared by the drum kit (one lane per drum voice) and the sampler (one lane per
 // slot). Clicking a lane label picks the voice/slot the inspector edits and
 // that Fill acts on; clicking a cell toggles that voice on that step.
 function renderHitLanes(container, instrument, { voices, activeVoice, onSelectVoice, isOn, onToggle, indicatorClass, toggleClass }) {
@@ -2527,14 +2582,14 @@ export function renderDrumStepGrid(container, instrument) {
     const stepAt = (index) => {
         const existing = steps[index] || createEmptyDrumStep();
         existing.layers = { ...createEmptyDrumStep().layers, ...(existing.layers || {}) };
-        existing.active = TR808_DRUMS.some((drum) => existing.layers[drum.id]);
+        existing.active = DRUM_VOICES.some((drum) => existing.layers[drum.id]);
         steps[index] = existing;
         return existing;
     };
 
     renderHitLanes(container, instrument, {
-        voices: TR808_DRUMS.map((drum) => ({ id: drum.id, label: drum.label })),
-        activeVoice: entry.activeDrum || TR808_DRUMS[0].id,
+        voices: DRUM_VOICES.map((drum) => ({ id: drum.id, label: drum.label })),
+        activeVoice: entry.activeDrum || DRUM_VOICES[0].id,
         indicatorClass: 'drum-indicator',
         toggleClass: 'step-toggle drum-step-toggle',
         isOn: (index, drumId) => Boolean(stepAt(index).layers[drumId]),
@@ -2542,7 +2597,7 @@ export function renderDrumStepGrid(container, instrument) {
             const step = stepAt(index);
             const next = !step.layers[drumId];
             step.layers[drumId] = next;
-            step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
+            step.active = DRUM_VOICES.some((drum) => step.layers[drum.id]);
             if (socket) {
                 socket.emit('instrument:step', {
                     instrumentId: instrument.id,
