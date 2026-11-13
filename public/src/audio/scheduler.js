@@ -157,7 +157,14 @@ export function scheduleStep(stepNumber, when) {
             return;
         }
 
-        scheduleInstrumentStep(instrument, step, when);
+        // One instrument failing must not abort the loop: runAudioScheduler()
+        // would then never advance nextStepIndex, stalling every instrument and
+        // re-triggering the ones scheduled before the failure on each tick.
+        try {
+            scheduleInstrumentStep(instrument, step, when);
+        } catch (error) {
+            console.error(`Scheduler: failed to schedule ${instrument.type} "${instrument.name}"`, error);
+        }
     });
 }
 

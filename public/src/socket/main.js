@@ -39,6 +39,71 @@ export const socket = io({ autoConnect: false });
 const ROOM_REQUEST_TIMEOUT_MS = 8000;
 let inviteLinkAutoJoinAttempted = false;
 
+// The server forgets room membership as soon as a socket drops, and Socket.IO
+// reconnects with a brand-new socket. Keep a fresh invite token (they expire
+// after 1 hour) so the client can rejoin its room after a reconnect.
+const REJOIN_TOKEN_REFRESH_MS = 30 * 60 * 1000;
+let rejoinToken = null;
+let rejoinTokenTimerId = null;
+
+function refreshRejoinToken() {
+    if (!state.isInRoom || !socket.connected) {
+        return;
+    }
+    socket.emit('requestInviteToken', { roomId: state.roomId }, (response = {}) => {
+        if (response.ok && response.token) {
+            rejoinToken = response.token;
+        }
+    });
+}
+
+function startRejoinTokenRefresh(initialToken = null) {
+    rejoinToken = initialToken;
+    refreshRejoinToken();
+    if (!rejoinTokenTimerId) {
+        rejoinTokenTimerId = window.setInterval(refreshRejoinToken, REJOIN_TOKEN_REFRESH_MS);
+    }
+}
+
+function stopRejoinTokenRefresh() {
+    if (rejoinTokenTimerId) {
+        window.clearInterval(rejoinTokenTimerId);
+        rejoinTokenTimerId = null;
+    }
+    rejoinToken = null;
+}
+
+function handleRejoinFailure(errorCode) {
+    leaveRoom();
+    const reason = errorCode === 'room-not-found'
+        ? 'The room no longer exists on the server.'
+        : `Reason: ${errorCode || 'unknown'}.`;
+    window.alert(`Lost the connection to the room and could not rejoin it. ${reason}`);
+}
+
+function rejoinRoomAfterReconnect() {
+    if (!state.isInRoom || socketState.pendingRoomRequest) {
+        return;
+    }
+    if (!rejoinToken) {
+        handleRejoinFailure('no-rejoin-token');
+        return;
+    }
+    // The server answers with a fresh `state:init`, which re-renders everything.
+    socket.emit('joinWithInvite', { token: rejoinToken }, (response = {}) => {
+        if (!state.isInRoom) {
+            return;
+        }
+        if (!response.ok) {
+            handleRejoinFailure(response.error);
+            return;
+        }
+        state.roomId = response.roomId || state.roomId;
+        state.roomSlug = response.slug || state.roomSlug;
+        refreshRejoinToken();
+    });
+}
+
 function clearRoomRequestTimer() {
     if (socketState.roomRequestTimeoutId) {
         clearTimeout(socketState.roomRequestTimeoutId);
@@ -75,10 +140,22 @@ export function setupSocketEvents() {
         }
     });
 
-    socket.on('disconnect', () => {
+    socket.on('connect', () => {
+        // `state.isInRoom` is only still true here if we were in a room when
+        // the previous connection dropped; a fresh connectToRoom() clears it.
+        if (state.isInRoom) {
+            rejoinRoomAfterReconnect();
+        }
+    });
+
+    socket.on('disconnect', (reason) => {
         resetPendingRoomRequestState();
         socketState.pendingInstrumentCreatorLabels.clear();
         socketState.pendingDefaultInstrumentLabel = null;
+        // Socket.IO does not auto-reconnect after a server-side disconnect.
+        if (reason === 'io server disconnect' && state.isInRoom) {
+            socket.connect();
+        }
     });
 
     socket.on('state:init', (payload) => {
@@ -649,6 +726,7 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
         if (mode === 'create') {
             state.membershipRole = 'owner';
         }
+        startRejoinTokenRefresh(mode === 'join' ? token : null);
         showSequencer();
         showRoomCodeHint(state.roomSlug || '');
         updateRoomUrl(state.roomSlug || '');
@@ -759,6 +837,7 @@ export function leaveRoom() {
         return;
     }
 
+    stopRejoinTokenRefresh();
     socket.emit('room:leave');
     socket.disconnect();
     resetPendingRoomRequestState();

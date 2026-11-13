@@ -1147,7 +1147,12 @@ app.get('/r/:slug', (_req, res) => {
 });
 
 const server = http.createServer(app);
-const io = new Server(server);
+
+// A sampler upload carries the file as base64 (4/3 of the raw size) plus a
+// small JSON envelope; Socket.IO's default 1 MB limit would drop the
+// connection for any sample above ~750 KB.
+const SOCKET_MAX_MESSAGE_BYTES = Math.ceil(SAMPLER_MAX_SAMPLE_BYTES / 3) * 4 + 64 * 1024;
+const io = new Server(server, { maxHttpBufferSize: SOCKET_MAX_MESSAGE_BYTES });
 
 // Rate limiters: points = max calls, duration = time window in seconds
 const rateLimiters = {
@@ -1175,8 +1180,47 @@ async function checkRateLimit(limiter, key, socket, callback) {
   }
 }
 
+const MAX_LOGGED_HANDLER_ERRORS_PER_SOCKET = 5;
+
+function logHandlerError(event, socket, error) {
+  // Cap per socket so a misbehaving client cannot flood the server log.
+  const count = (socket.data.handlerErrorCount || 0) + 1;
+  socket.data.handlerErrorCount = count;
+  if (count > MAX_LOGGED_HANDLER_ERRORS_PER_SOCKET) {
+    return;
+  }
+  const message = error && error.message ? error.message : String(error);
+  const suffix = count === MAX_LOGGED_HANDLER_ERRORS_PER_SOCKET ? ' (further errors from this socket are not logged)' : '';
+  console.warn(`[socket ${socket.id}] "${event}" handler failed: ${message}${suffix}`);
+}
+
+// Registers a socket event handler that can never take the process down:
+// malformed payloads (e.g. `null`) make destructuring handlers throw, and an
+// uncaught throw or rejected promise inside a Socket.IO listener kills Node.
+function registerSafeHandler(socket, event, handler) {
+  socket.on(event, (...args) => {
+    const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+    const fail = (error) => {
+      logHandlerError(event, socket, error);
+      if (callback) {
+        callback({ ok: false, error: 'invalid-payload' });
+      }
+    };
+    try {
+      const result = handler(...args);
+      if (result && typeof result.then === 'function') {
+        result.catch(fail);
+      }
+    } catch (error) {
+      fail(error);
+    }
+  });
+}
+
 io.on('connection', (socket) => {
-  socket.on('room:create', async ({ roomName, displayName } = {}, callback) => {
+  const on = (event, handler) => registerSafeHandler(socket, event, handler);
+
+  on('room:create', async ({ roomName, displayName } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     if (!await checkRateLimit(rateLimiters.roomCreate, socket.handshake.address, socket, respond)) return;
     const sanitizedName = sanitizeRoomName(roomName);
@@ -1202,7 +1246,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('joinWithInvite', async ({ token } = {}, callback) => {
+  on('joinWithInvite', async ({ token } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     if (!await checkRateLimit(rateLimiters.joinWithInvite, socket.handshake.address, socket, respond)) return;
     const validation = validateInviteToken(token);
@@ -1225,7 +1269,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('requestInviteToken', ({ roomId } = {}, callback) => {
+  on('requestInviteToken', ({ roomId } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const activeRoomId = socket.data.roomId;
     if (!activeRoomId) {
@@ -1253,7 +1297,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('room:leave', async (_payload, callback) => {
+  on('room:leave', async (_payload, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     try {
       await leaveCurrentRoom(socket);
@@ -1263,7 +1307,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('step:toggle', ({ index, active }) => {
+  on('step:toggle', ({ index, active }) => {
     const roomId = socket.data.roomId;
     if (!roomId) {
       return;
@@ -1279,7 +1323,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('step:update', { index, active: coercedActive });
   });
 
-  socket.on('tempo:set', (nextTempo) => {
+  on('tempo:set', (nextTempo) => {
     const roomId = socket.data.roomId;
     if (!roomId) {
       return;
@@ -1297,7 +1341,7 @@ io.on('connection', (socket) => {
     broadcastTransportState(roomId);
   });
 
-  socket.on('transport:set-tempo', async ({ bpm } = {}) => {
+  on('transport:set-tempo', async ({ bpm } = {}) => {
     if (!await checkRateLimit(rateLimiters.tempoSet, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1311,7 +1355,7 @@ io.on('connection', (socket) => {
     broadcastTransportState(room.id);
   });
 
-  socket.on('transport:play', () => {
+  on('transport:play', () => {
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1323,7 +1367,7 @@ io.on('connection', (socket) => {
     broadcastTransportState(room.id);
   });
 
-  socket.on('transport:stop', () => {
+  on('transport:stop', () => {
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1334,7 +1378,7 @@ io.on('connection', (socket) => {
     broadcastTransportState(room.id);
   });
 
-  socket.on('instrument:set-length', ({ instrumentId, stepCount } = {}, callback) => {
+  on('instrument:set-length', ({ instrumentId, stepCount } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1370,7 +1414,7 @@ io.on('connection', (socket) => {
     respond({ ok: true, stepCount: instrument.stepCount });
   });
 
-  socket.on('instrument:add', async ({ type, name, creatorDisplayName, creatorUserId } = {}, callback) => {
+  on('instrument:add', async ({ type, name, creatorDisplayName, creatorUserId } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     if (!await checkRateLimit(rateLimiters.instrumentAdd, socket.id, socket, respond)) return;
     const room = getRoomForSocket(socket);
@@ -1399,7 +1443,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('instrument:remove', ({ instrumentId } = {}, callback) => {
+  on('instrument:remove', ({ instrumentId } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1430,7 +1474,7 @@ io.on('connection', (socket) => {
     respond({ ok: true });
   });
 
-  socket.on('instrument:param', async ({ instrumentId, params } = {}) => {
+  on('instrument:param', async ({ instrumentId, params } = {}) => {
     if (!await checkRateLimit(rateLimiters.instrumentParam, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1455,7 +1499,7 @@ io.on('connection', (socket) => {
     broadcastInstrumentState(room.id, instrumentId);
   });
 
-  socket.on('instrument:mute', async ({ instrumentId, muted } = {}) => {
+  on('instrument:mute', async ({ instrumentId, muted } = {}) => {
     if (!await checkRateLimit(rateLimiters.instrumentParam, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room || typeof instrumentId !== 'string') return;
@@ -1465,7 +1509,7 @@ io.on('connection', (socket) => {
     broadcastInstrumentState(room.id, instrumentId);
   });
 
-  socket.on('instrument:rename', ({ instrumentId, name } = {}, callback) => {
+  on('instrument:rename', ({ instrumentId, name } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1500,7 +1544,7 @@ io.on('connection', (socket) => {
     respond({ ok: true, name: sanitizedName });
   });
 
-  socket.on('instrument:step', async ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
+  on('instrument:step', async ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
     if (!await checkRateLimit(rateLimiters.instrumentStep, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1561,7 +1605,7 @@ io.on('connection', (socket) => {
     broadcastInstrumentState(room.id, instrumentId);
   });
 
-  socket.on('lockSynth', (payload) => {
+  on('lockSynth', (payload) => {
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1595,7 +1639,7 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('synthLocked', { synthName: instrument.name, instrumentId: instrument.id, lockedBy: socket.id });
   });
 
-  socket.on('unlockSynth', (payload) => {
+  on('unlockSynth', (payload) => {
     const room = getRoomForSocket(socket);
     if (!room) {
       return;
@@ -1611,7 +1655,7 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
   });
 
-  socket.on('time:pong', ({ id, clientSendTime }) => {
+  on('time:pong', ({ id, clientSendTime }) => {
     if (typeof id !== 'number' || !Number.isFinite(clientSendTime)) {
       return;
     }
@@ -1630,7 +1674,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('lfo:add', async (_payload, callback) => {
+  on('lfo:add', async (_payload, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     if (!await checkRateLimit(rateLimiters.lfoAdd, socket.id, socket, respond)) return;
     const room = getRoomForSocket(socket);
@@ -1643,14 +1687,14 @@ io.on('connection', (socket) => {
     respond({ ok: true, lfo });
   });
 
-  socket.on('lfo:remove', ({ lfoId } = {}) => {
+  on('lfo:remove', ({ lfoId } = {}) => {
     const room = getRoomForSocket(socket);
     if (!room || typeof lfoId !== 'string') return;
     room.lfos = (room.lfos || []).filter(l => l.id !== lfoId);
     io.to(room.id).emit('lfo:removed', { lfoId });
   });
 
-  socket.on('lfo:update', async ({ lfoId, params } = {}) => {
+  on('lfo:update', async ({ lfoId, params } = {}) => {
     if (!await checkRateLimit(rateLimiters.lfoUpdate, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room || typeof lfoId !== 'string') return;
@@ -1660,7 +1704,7 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('lfo:updated', lfo);
   });
 
-  socket.on('disconnect', () => {
+  on('disconnect', () => {
     const { roomId } = socket.data;
     if (!roomId) {
       return;
@@ -1704,7 +1748,6 @@ function createRoomState({
     instruments: new Map(),
     instrumentOrder: [],
     lfos: [],
-    graceUsed: false,
   };
 
   const defaultInstrument = createInstrument(SynthTypes.TB303, {
@@ -1770,13 +1813,9 @@ function removeSocketFromRoom(room, socketId) {
 
   room.members.delete(socketId);
   if (room.members.size === 0) {
-    if (!room.graceUsed) {
-      room.graceUsed = true;
-      scheduleRoomCleanup(room.id);
-    } else {
-      rooms.delete(room.id);
-      if (room.slug) slugToRoomId.delete(room.slug);
-    }
+    // Every time the room empties it gets the full grace period, so a
+    // collaborator whose connection drops can reconnect and rejoin.
+    scheduleRoomCleanup(room.id);
   }
 }
 

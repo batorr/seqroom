@@ -20,7 +20,9 @@ export function scheduleTB303(instrument, step, when, ctx) {
     filter.Q.setValueAtTime(0.5 + getModulatedParam(id, 'resonance', params.resonance ?? 0.5, 0, 1) * 12, when);
 
     const env = ctx.createGain();
-    const volume = clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1);
+    // exponentialRampToValueAtTime() throws a RangeError for a target of 0,
+    // so a fully closed volume (slider or LFO) must stay just above zero.
+    const volume = Math.max(0.0001, clampValue(getModulatedParam(id, 'volume', params.volume ?? 0.8, 0, 1), 0, 1));
     const decay = 0.1 + (params.decay ?? 0.5) * 0.5;
     const peakTime = when + 0.01;
     env.gain.setValueAtTime(0.0001, when);
