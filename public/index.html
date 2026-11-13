@@ -1408,6 +1408,55 @@
 
       .step-pitch-select:active { transform: translateY(1px); }
 
+      .step-modifiers {
+        display: flex;
+        gap: 4px;
+        width: 100%;
+        justify-content: center;
+      }
+
+      .step-mod-btn {
+        flex: 1;
+        padding: 2px 0;
+        border-radius: var(--r-sm);
+        border: 1px solid rgba(220, 224, 248, 0.2);
+        background: rgba(108, 114, 140, 0.25);
+        color: rgba(220, 224, 248, 0.5);
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+      }
+
+      .step-mod-btn:hover { background: rgba(108, 114, 140, 0.45); color: rgba(220, 224, 248, 0.85); }
+
+      .step-accent-btn.active {
+        background: rgba(251, 146, 60, 0.35);
+        border-color: rgba(251, 146, 60, 0.7);
+        color: #fb923c;
+      }
+
+      .step-slide-btn.active {
+        background: rgba(99, 202, 253, 0.25);
+        border-color: rgba(99, 202, 253, 0.6);
+        color: #63cafd;
+      }
+
+      /* Bigger hit area; the cell is narrow, so grow in height. */
+      .step-modifiers { gap: 2px; }
+      .step-mod-btn { min-height: 20px; font-size: 0.7rem; }
+      .step-mod-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+      /* On an active (light) step cell the dark-theme colours vanish. */
+      .step-cell.active .step-mod-btn:not(.active) {
+        background: rgba(8, 8, 14, 0.08);
+        border-color: rgba(8, 8, 14, 0.28);
+        color: rgba(8, 8, 14, 0.6);
+      }
+      .step-cell.active .step-accent-btn.active { background: #fb923c; border-color: #c2410c; color: #1a0d05; }
+      .step-cell.active .step-slide-btn.active { background: #63cafd; border-color: #0369a1; color: #04121a; }
+
       .drum-indicator {
         display: block;
         width: 100%;

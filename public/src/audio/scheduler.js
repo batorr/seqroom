@@ -13,7 +13,7 @@ import { AUDIO_LOOKAHEAD_MS, AUDIO_SCHEDULE_AHEAD_SECONDS } from '../constants/a
 import { STEP_COUNT } from '../constants/ui.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { clampStepCount } from '../utils/helpers.js';
-import { stepPositionAt, collectDueSteps } from '../shared/timeline.js';
+import { stepPositionAt, stepTime, collectDueSteps } from '../shared/timeline.js';
 import {
     ensureAudioContext,
     getServerSyncedTime,
@@ -110,7 +110,8 @@ export function runAudioScheduler() {
             audioState.droppedSteps += 1;
             return;
         }
-        scheduleStep(step, Math.max(when, ctx.currentTime));
+        const stepDuration = (stepTime(state.transport, step + 1) - time) / 1000;
+        scheduleStep(step, Math.max(when, ctx.currentTime), stepDuration);
     });
 }
 
@@ -159,7 +160,8 @@ function stopPlayheadLoop() {
 }
 
 // Schedule a single step across all instruments
-export function scheduleStep(stepNumber, when) {
+// stepDuration: seconds until the next step (lets a sliding note hold until then).
+export function scheduleStep(stepNumber, when, stepDuration) {
     state.instrumentOrder.forEach((instrumentId) => {
         const instrument = state.instruments.get(instrumentId);
         if (!instrument) {
@@ -179,16 +181,18 @@ export function scheduleStep(stepNumber, when) {
         }
 
         const localIndex = stepNumber % instrumentStepCount;
+        const prevIndex = (localIndex - 1 + instrumentStepCount) % instrumentStepCount;
         const step = steps[localIndex] || steps[localIndex % steps.length];
         if (!step || !step.active) {
             return;
         }
+        const prevStep = steps[prevIndex] || null;
 
         // One instrument failing must not abort the loop: runAudioScheduler()
         // would then never advance nextStepIndex, stalling every instrument and
         // re-triggering the ones scheduled before the failure on each tick.
         try {
-            scheduleInstrumentStep(instrument, step, when);
+            scheduleInstrumentStep(instrument, step, prevStep, when, stepDuration);
         } catch (error) {
             console.error(`Scheduler: failed to schedule ${instrument.type} "${instrument.name}"`, error);
         }
@@ -196,7 +200,7 @@ export function scheduleStep(stepNumber, when) {
 }
 
 // Schedule individual instrument step
-export function scheduleInstrumentStep(instrument, step, when) {
+export function scheduleInstrumentStep(instrument, step, prevStep, when, stepDuration) {
     if (audioState.mutedInstruments.has(instrument.id)) {
         return;
     }
@@ -207,7 +211,7 @@ export function scheduleInstrumentStep(instrument, step, when) {
 
     switch (instrument.type) {
         case SynthTypes.TB303:
-            scheduleTB303(instrument, step, when, ctx);
+            scheduleTB303(instrument, step, prevStep, when, ctx, stepDuration);
             break;
         case SynthTypes.TR808:
             scheduleTR808(instrument, step, when, ctx);

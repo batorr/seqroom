@@ -1005,6 +1005,10 @@ export function ensureInstrumentCard(instrument) {
             const defaultPitch = instr.type === SynthTypes.TB303 ? 'C2' : instr.type === SynthTypes.POLY ? 'C4' : 'C3';
             for (let i = 0; i < count; i++) {
                 const step = clearing ? { active: false, pitch: defaultPitch } : { active: true };
+                if (clearing && instr.type === SynthTypes.TB303) {
+                    step.accent = false;
+                    step.slide = false;
+                }
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             }
         }
@@ -1039,7 +1043,12 @@ export function ensureInstrumentCard(instrument) {
             for (let i = 0; i < count; i++) {
                 const active = Math.random() < 0.5;
                 const pitch = randomNotes[Math.floor(Math.random() * randomNotes.length)];
-                socket.emit('instrument:step', { instrumentId, stepIndex: i, step: { active, pitch } });
+                const step = { active, pitch };
+                if (instr.type === SynthTypes.TB303) {
+                    step.accent = active && Math.random() < 0.25;
+                    step.slide = active && Math.random() < 0.15;
+                }
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             }
         }
     });
@@ -1323,6 +1332,11 @@ function updateInstrumentLockState(entry, instrument) {
             } else if (typeof ref.disabled !== 'boolean') {
                 ref.disabled = disableControls;
             }
+            [ref.accentBtn, ref.slideBtn].forEach((button) => {
+                if (button) {
+                    setLockedDisabled(button, disableControls);
+                }
+            });
             if (ref.pitchSelect) {
                 setLockedDisabled(ref.pitchSelect, disableControls);
                 if (!ref.baseDisabled) {
@@ -2192,6 +2206,59 @@ export function renderMelodicStepGrid(container, instrument) {
 
         cell.appendChild(toggleBtn);
         cell.appendChild(pitchSelect);
+
+        let accentBtn = null;
+        let slideBtn = null;
+        if (instrument.type === SynthTypes.TB303) {
+            const modifiers = document.createElement('div');
+            modifiers.className = 'step-modifiers';
+
+            accentBtn = document.createElement('button');
+            accentBtn.type = 'button';
+            accentBtn.className = 'step-mod-btn step-accent-btn';
+            accentBtn.textContent = 'A';
+            accentBtn.title = 'Accent';
+            accentBtn.classList.toggle('active', Boolean(step.accent));
+            accentBtn.disabled = !withinPattern;
+
+            slideBtn = document.createElement('button');
+            slideBtn.type = 'button';
+            slideBtn.className = 'step-mod-btn step-slide-btn';
+            slideBtn.textContent = 'S';
+            slideBtn.title = 'Slide';
+            slideBtn.classList.toggle('active', Boolean(step.slide));
+            slideBtn.disabled = !withinPattern;
+
+            if (withinPattern) {
+                accentBtn.addEventListener('click', () => {
+                    const next = !step.accent;
+                    step.accent = next;
+                    accentBtn.classList.toggle('active', next);
+                    if (!socket) return;
+                    socket.emit('instrument:step', {
+                        instrumentId: instrument.id,
+                        stepIndex: patternIndex,
+                        step: { accent: next },
+                    });
+                });
+                slideBtn.addEventListener('click', () => {
+                    const next = !step.slide;
+                    step.slide = next;
+                    slideBtn.classList.toggle('active', next);
+                    if (!socket) return;
+                    socket.emit('instrument:step', {
+                        instrumentId: instrument.id,
+                        stepIndex: patternIndex,
+                        step: { slide: next },
+                    });
+                });
+            }
+
+            modifiers.appendChild(accentBtn);
+            modifiers.appendChild(slideBtn);
+            cell.appendChild(modifiers);
+        }
+
         container.appendChild(cell);
 
         const baseDisabled = !withinPattern;
@@ -2199,6 +2266,8 @@ export function renderMelodicStepGrid(container, instrument) {
             cell,
             toggleBtn,
             pitchSelect,
+            accentBtn,
+            slideBtn,
             disabled: baseDisabled,
             baseDisabled,
         });
