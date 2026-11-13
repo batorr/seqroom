@@ -1,5 +1,6 @@
 const path = require('path');
 const os = require('os');
+const { pathToFileURL } = require('url');
 const express = require('express');
 const http = require('http');
 const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
@@ -112,13 +113,6 @@ function clampStepCount(value) {
   return clamp(Math.round(numeric), STEP_COUNT_MIN, STEP_COUNT_MAX);
 }
 
-function computeStepDurationMs(bpm) {
-  const numeric = Number(bpm);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return 0;
-  }
-  return 60000 / (numeric * 4);
-}
 
 function normalizeWaveform(value) {
   if (typeof value === 'string' && value.toLowerCase() === 'saw') {
@@ -601,8 +595,11 @@ function cloneTransport(transport) {
   return {
     bpm: transport.bpm,
     playing: transport.playing,
-    sessionStartTime: transport.sessionStartTime,
-    lastScheduledStart: transport.lastScheduledStart,
+    playId: transport.playId,
+    segments: (transport.segments || []).map((segment) => ({ ...segment })),
+    // Pre-timeline clients compute every step from these two fields.
+    sessionStartTime: timeline.legacySessionStartTime(transport),
+    lastScheduledStart: null,
   };
 }
 
@@ -617,28 +614,13 @@ function updateRoomTempo(room, nextTempo) {
   }
 
   const clampedTempo = Math.round(clamp(numericTempo, TEMPO_MIN, TEMPO_MAX));
-  const newStepDuration = computeStepDurationMs(clampedTempo);
-  if (newStepDuration <= 0) {
+  if (clampedTempo === room.transport.bpm) {
     return false;
   }
 
-  if (
-    room.transport.playing
-    && typeof room.transport.sessionStartTime === 'number'
-    && Number.isFinite(room.transport.sessionStartTime)
-  ) {
-    const now = Date.now();
-    const elapsed = now - room.transport.sessionStartTime;
-    const oldStepDuration = computeStepDurationMs(room.transport.bpm || DEFAULT_TEMPO);
-    if (elapsed > 0 && oldStepDuration > 0) {
-      const stepProgress = elapsed / oldStepDuration;
-      const newSessionStart = now - stepProgress * newStepDuration;
-      room.transport.sessionStartTime = Math.round(newSessionStart);
-      room.transport.lastScheduledStart = room.transport.sessionStartTime;
-    }
-  }
-
-  room.transport.bpm = clampedTempo;
+  // Takes effect on a step boundary far enough ahead that no client has
+  // queued audio for it yet (see public/src/shared/timeline.js).
+  room.transport = timeline.changeTempo(room.transport, clampedTempo, Date.now());
   return true;
 }
 
@@ -1115,6 +1097,8 @@ const rooms = new Map();
 const slugToRoomId = new Map();
 const roomEmptyTimers = new Map();
 let lastPingId = 0;
+// Set from public/src/shared/timeline.js before the server starts listening.
+let timeline = null;
 
 const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
 
@@ -1161,7 +1145,7 @@ const rateLimiters = {
   instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),
   instrumentParam: new RateLimiterMemory({ points: 300, duration: 60 }),
   instrumentStep:  new RateLimiterMemory({ points: 300, duration: 60 }),
-  tempoSet:        new RateLimiterMemory({ points: 300, duration: 60 }),
+  tempoSet:        new RateLimiterMemory({ points: 600, duration: 60 }),
   lfoAdd:          new RateLimiterMemory({ points: 20,  duration: 60 }),
   lfoUpdate:       new RateLimiterMemory({ points: 300, duration: 60 }),
 };
@@ -1323,7 +1307,8 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('step:update', { index, active: coercedActive });
   });
 
-  on('tempo:set', (nextTempo) => {
+  on('tempo:set', async (nextTempo) => {
+    if (!await checkRateLimit(rateLimiters.tempoSet, socket.id, socket)) return;
     const roomId = socket.data.roomId;
     if (!roomId) {
       return;
@@ -1361,9 +1346,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    room.transport.playing = true;
-    room.transport.sessionStartTime = Date.now() + SESSION_START_DELAY_MS;
-    room.transport.lastScheduledStart = room.transport.sessionStartTime;
+    room.transport = timeline.startTransport(room.transport, Date.now() + SESSION_START_DELAY_MS);
     broadcastTransportState(room.id);
   });
 
@@ -1373,8 +1356,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    room.transport.playing = false;
-    room.transport.lastScheduledStart = null;
+    room.transport = timeline.stopTransport(room.transport);
     broadcastTransportState(room.id);
   });
 
@@ -1655,6 +1637,15 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('synthUnlocked', { synthName: instrument.name, instrumentId: instrument.id });
   });
 
+  // Client-initiated clock probe (used for a quick burst right after joining).
+  on('time:request', (_payload, callback) => {
+    if (typeof callback !== 'function') {
+      return;
+    }
+    const serverReceiveTime = Date.now();
+    callback({ serverReceiveTime, serverResponseTime: Date.now() });
+  });
+
   on('time:pong', ({ id, clientSendTime }) => {
     if (typeof id !== 'number' || !Number.isFinite(clientSendTime)) {
       return;
@@ -1742,8 +1733,8 @@ function createRoomState({
     transport: {
       bpm: DEFAULT_TEMPO,
       playing: false,
-      sessionStartTime: now + SESSION_START_DELAY_MS,
-      lastScheduledStart: null,
+      playId: 0,
+      segments: [],
     },
     instruments: new Map(),
     instrumentOrder: [],
@@ -2042,7 +2033,17 @@ function logLocalAddresses() {
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`Seqroom server running on http://localhost:${PORT}`);
-  logLocalAddresses();
-});
+// The transport timeline is an ES module shared with the browser, so it is
+// loaded before the server starts accepting connections.
+import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', 'timeline.js')).href)
+  .then((module) => {
+    timeline = module;
+    server.listen(PORT, () => {
+      console.log(`Seqroom server running on http://localhost:${PORT}`);
+      logLocalAddresses();
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to load the transport timeline module:', error);
+    process.exit(1);
+  });

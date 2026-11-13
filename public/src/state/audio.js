@@ -7,7 +7,12 @@ export const audioState = {
     masterGain: null,
     schedulerId: null,
     nextStepIndex: 0,
-    lastStepDurationMs: null,
+    // Server time of the last step handed to Web Audio; nothing at or before
+    // it is scheduled again.
+    lastScheduledTime: -Infinity,
+    // transport.playId the scheduler is currently following.
+    scheduledPlayId: null,
+    droppedSteps: 0,
     isRecording: false,
     recordingNode: null,
     recordingChunks: [],

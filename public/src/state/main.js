@@ -13,8 +13,13 @@ import {
     createEmptySamplerStep,
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
+import { normalizeTransport } from '../shared/timeline.js';
 
 const DISPLAY_NAME_MAX_LENGTH = 32;
+
+export function normalizeServerTransport(rawTransport) {
+    return normalizeTransport(rawTransport || {}, { defaultBpm: DEFAULT_BPM, clampBpm: clampTempo });
+}
 export const DEFAULT_DISPLAY_NAME = 'Guest';
 
 // Main application state
@@ -22,11 +27,12 @@ export const state = {
     isInRoom: false,
     roomId: null,
     roomSlug: null,
+    // See shared/timeline.js for the shape and semantics.
     transport: {
         bpm: DEFAULT_BPM,
         playing: false,
-        sessionStartTime: null,
-        lastScheduledStart: null,
+        playId: null,
+        segments: [],
     },
     instruments: new Map(),
     instrumentOrder: [],
@@ -164,13 +170,7 @@ export function hydrateState(payload) {
     state.roomSlug = payload.roomSlug || payload.slug || null;
     state.membershipRole = payload.role || 'guest';
 
-    const transport = payload.transport || {};
-    state.transport = {
-        bpm: clampTempo(transport.bpm ?? DEFAULT_BPM),
-        playing: Boolean(transport.playing),
-        sessionStartTime: transport.sessionStartTime ?? null,
-        lastScheduledStart: transport.lastScheduledStart ?? null,
-    };
+    state.transport = normalizeServerTransport(payload.transport);
 
     state.instruments.clear();
     (payload.instruments || []).forEach((instrument) => {
@@ -352,8 +352,3 @@ export function setInstrumentStepCountLocal(instrumentId, stepCount) {
     ensureLocalInstrumentCapacity(instrument, desired);
 }
 
-// Helper to get step duration in milliseconds
-export function getStepDurationMs() {
-    const bpm = clampTempo(state.transport.bpm || DEFAULT_BPM);
-    return 60000 / (bpm * 4);
-}

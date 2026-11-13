@@ -1,6 +1,8 @@
 // LFO Engine - local modulation only, not synced over socket
 
 import { state } from '../state/main.js';
+import { stepPositionAt, STEPS_PER_BEAT } from '../shared/timeline.js';
+import { getServerSyncedTime } from './main.js';
 
 export const LFO_DIVISIONS = [
     { label: '1/32', beats: 0.125 },
@@ -48,14 +50,18 @@ function _stopClock() {
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
 }
 
-export function syncLFOClock() {
+// `restarted`: a new playback run began. Tempo changes must not reset the
+// free-running/sample-and-hold state, or every slider move would glitch it.
+export function syncLFOClock({ restarted = false } = {}) {
     const playing = Boolean(state.transport?.playing);
     if (playing && lfos.size > 0) {
-        lfos.forEach(lfo => {
-            if (lfo.jitter > 0) lfo._phase = 0;
-            lfo._sahInit = false;
-            lfo._sahHistory = [];
-        });
+        if (restarted) {
+            lfos.forEach(lfo => {
+                if (lfo.jitter > 0) lfo._phase = 0;
+                lfo._sahInit = false;
+                lfo._sahHistory = [];
+            });
+        }
         _startClock();
     } else {
         _stopClock();
@@ -93,8 +99,10 @@ export function waveformAt(type, shape, p) {
 
 function _tick(dt) {
     const bpm = state.transport?.bpm ?? 120;
-    const sessionStartTime = state.transport?.sessionStartTime;
-    const elapsedSec = sessionStartTime ? Math.max(0, (Date.now() - sessionStartTime) / 1000) : 0;
+    // Beats since the start on the shared server timeline: identical on every
+    // client and continuous across tempo changes.
+    const position = state.transport?.playing ? stepPositionAt(state.transport, getServerSyncedTime()) : 0;
+    const beats = Math.max(0, position) / STEPS_PER_BEAT;
     lfos.forEach(lfo => {
         const rateHz = (bpm / 60) / lfo.division;
         const prevPhase = lfo._phase;
@@ -102,7 +110,7 @@ function _tick(dt) {
             const jFactor = 1 + lfo.jitter * (Math.random() - 0.5) * 0.5;
             lfo._phase += rateHz * jFactor * dt;
         } else {
-            lfo._phase = rateHz * elapsedSec;
+            lfo._phase = beats / lfo.division;
         }
 
         let raw;

@@ -1,40 +1,47 @@
 // Audio Scheduler Module
 // Manages step sequencing and audio event scheduling
+//
+// Step times come from the shared transport timeline (server time). Each tick
+// hands every step that falls inside the look-ahead window to Web Audio,
+// converted to AudioContext time so it is heard at its server time. The
+// scheduler only ever moves forward: tempo changes are scheduled by the server
+// beyond every client's look-ahead, so nothing already queued has to move.
 
-import { state, ensureLocalInstrumentCapacity, getStepDurationMs } from '../state/main.js';
+import { state, ensureLocalInstrumentCapacity } from '../state/main.js';
 import { audioState } from '../state/audio.js';
 import { AUDIO_LOOKAHEAD_MS, AUDIO_SCHEDULE_AHEAD_SECONDS } from '../constants/audio.js';
 import { STEP_COUNT } from '../constants/ui.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { clampStepCount } from '../utils/helpers.js';
-import { ensureAudioContext, getServerSyncedTime, getClientAbsoluteTime } from './main.js';
+import { stepPositionAt, collectDueSteps } from '../shared/timeline.js';
+import {
+    ensureAudioContext,
+    getServerSyncedTime,
+    updateAudioClockMapping,
+    serverTimeToContextTime,
+    contextTimeToServerTime,
+} from './main.js';
 import { scheduleTB303 } from './instruments/tb303.js';
 import { scheduleTR808 } from './instruments/tr808.js';
 import { scheduleSampler } from './instruments/sampler.js';
 import { schedulePolySynth } from './instruments/poly-synth.js';
 
-// Get current step index based on transport state
+// A step that is due less than this far in the past is still played (a few
+// ms late beats silence); anything later is dropped.
+const LATE_TOLERANCE_SECONDS = 0.015;
+
+// Step that is audible right now (-1 when stopped or before the start).
 export function getCurrentStepIndex() {
-    if (!state.transport.playing || !state.transport.sessionStartTime) {
+    if (!state.transport.playing) {
         return -1;
     }
-
-    const stepDurationMs = getStepDurationMs();
-    if (!Number.isFinite(stepDurationMs) || stepDurationMs <= 0) {
-        return -1;
-    }
-
-    const elapsed = getServerSyncedTime() - state.transport.sessionStartTime;
-    if (elapsed < 0) {
-        return -1;
-    }
-
-    return Math.floor(elapsed / stepDurationMs);
+    const position = stepPositionAt(state.transport, getServerSyncedTime());
+    return position >= 0 ? Math.floor(position) : -1;
 }
 
-// Sync and start audio scheduler
+// Called whenever the transport changes (state:init, transport:update).
 export function syncAudioScheduler() {
-    if (!state.transport.playing || !state.isInRoom) {
+    if (!state.transport.playing || !state.isInRoom || !state.transport.segments.length) {
         stopAudioScheduler();
         return;
     }
@@ -44,91 +51,111 @@ export function syncAudioScheduler() {
         return;
     }
 
-    const stepDurationMs = getStepDurationMs();
-    if (!Number.isFinite(stepDurationMs) || !state.transport.sessionStartTime) {
-        return;
+    if (audioState.scheduledPlayId !== state.transport.playId) {
+        // A new playback run (or the first time this client sees it): start at
+        // the current position. Tempo changes within a run keep nextStepIndex.
+        audioState.scheduledPlayId = state.transport.playId;
+        const position = stepPositionAt(state.transport, getServerSyncedTime());
+        audioState.nextStepIndex = Math.max(0, Math.ceil(position));
+        audioState.lastScheduledTime = -Infinity;
+        audioState.droppedSteps = 0;
     }
-
-    const previousStepDuration = audioState.lastStepDurationMs;
-    audioState.lastStepDurationMs = stepDurationMs;
-    const tempoSlowed = Number.isFinite(previousStepDuration) && stepDurationMs > previousStepDuration;
-
-    const elapsed = getServerSyncedTime() - state.transport.sessionStartTime;
-    const currentStep = elapsed >= 0 ? Math.floor(elapsed / stepDurationMs) : -1;
-    const targetNextIndex = currentStep >= 0 ? currentStep + 1 : 0;
-    const currentNextIndex = Number.isFinite(audioState.nextStepIndex) ? audioState.nextStepIndex : 0;
-
-    if (tempoSlowed && targetNextIndex < currentNextIndex) {
-        audioState.nextStepIndex = targetNextIndex;
-    } else if (targetNextIndex > currentNextIndex) {
-        audioState.nextStepIndex = targetNextIndex;
-    } else {
-        audioState.nextStepIndex = Math.max(currentNextIndex, 0);
-    }
-
-    import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
-        updatePlaybackIndicators(currentStep);
-    }).catch(console.error);
 
     if (!audioState.schedulerId) {
         audioState.schedulerId = setInterval(runAudioScheduler, AUDIO_LOOKAHEAD_MS);
     }
-
+    startPlayheadLoop();
     runAudioScheduler();
 }
 
-// Stop audio scheduler
 export function stopAudioScheduler() {
     if (audioState.schedulerId) {
         clearInterval(audioState.schedulerId);
         audioState.schedulerId = null;
     }
     audioState.nextStepIndex = 0;
-    audioState.lastStepDurationMs = null;
-    import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
-        updatePlaybackIndicators(-1);
-    }).catch(console.error);
+    audioState.lastScheduledTime = -Infinity;
+    audioState.scheduledPlayId = null;
+    stopPlayheadLoop();
+    withPlaybackIndicators((updatePlaybackIndicators) => updatePlaybackIndicators(-1));
 }
 
-// Run audio scheduler loop
 export function runAudioScheduler() {
-    if (!state.transport.playing || !state.transport.sessionStartTime) {
+    if (!state.transport.playing || !state.transport.segments.length) {
         return;
     }
 
     const ctx = ensureAudioContext();
-    if (!ctx) {
+    // Nothing can be heard until the browser lets the context run (user
+    // gesture); steps that pass meanwhile are dropped as late afterwards.
+    if (!ctx || ctx.state !== 'running') {
         return;
     }
 
-    const stepDurationMs = getStepDurationMs();
-    if (!Number.isFinite(stepDurationMs) || stepDurationMs <= 0) {
+    updateAudioClockMapping(ctx);
+    // Everything that has to start before currentTime + look-ahead is queued
+    // now; in server time that window also covers the output latency.
+    const horizonTime = contextTimeToServerTime(ctx, ctx.currentTime + AUDIO_SCHEDULE_AHEAD_SECONDS);
+    const result = collectDueSteps(state.transport, {
+        nextStep: audioState.nextStepIndex,
+        lastTime: audioState.lastScheduledTime,
+        horizonTime,
+    });
+    audioState.nextStepIndex = result.nextStep;
+    audioState.lastScheduledTime = result.lastTime;
+
+    result.due.forEach(({ step, time }) => {
+        const when = serverTimeToContextTime(ctx, time);
+        if (when < ctx.currentTime - LATE_TOLERANCE_SECONDS) {
+            audioState.droppedSteps += 1;
+            return;
+        }
+        scheduleStep(step, Math.max(when, ctx.currentTime));
+    });
+}
+
+// Playhead: driven by animation frames from the audible position, and only
+// touches the DOM when the step actually changes.
+let playheadFrameId = null;
+let lastPlayheadStep = null;
+let playbackIndicatorsFn = null;
+
+function withPlaybackIndicators(callback) {
+    if (playbackIndicatorsFn) {
+        callback(playbackIndicatorsFn);
         return;
     }
-
-    const serverNow = getServerSyncedTime();
+    // Dynamic import avoids a circular dependency with the UI module.
     import('../ui/instrument-card.js').then(({ updatePlaybackIndicators }) => {
-        updatePlaybackIndicators(getCurrentStepIndex());
+        playbackIndicatorsFn = updatePlaybackIndicators;
+        callback(playbackIndicatorsFn);
     }).catch(console.error);
+}
 
-    const scheduleUntil = serverNow + AUDIO_SCHEDULE_AHEAD_SECONDS * 1000;
-    const clientNow = getClientAbsoluteTime();
-
-    while (true) {
-        const stepStartMs = state.transport.sessionStartTime + audioState.nextStepIndex * stepDurationMs;
-        if (stepStartMs > scheduleUntil) {
-            break;
-        }
-
-        const deltaMs = stepStartMs - clientNow;
-        const when = ctx.currentTime + deltaMs / 1000;
-
-        if (when >= ctx.currentTime) {
-            scheduleStep(audioState.nextStepIndex, when);
-        }
-
-        audioState.nextStepIndex += 1;
+function playheadFrame() {
+    playheadFrameId = requestAnimationFrame(playheadFrame);
+    const step = getCurrentStepIndex();
+    if (step !== lastPlayheadStep && playbackIndicatorsFn) {
+        lastPlayheadStep = step;
+        playbackIndicatorsFn(step);
     }
+}
+
+function startPlayheadLoop() {
+    if (playheadFrameId !== null) {
+        return;
+    }
+    lastPlayheadStep = null;
+    withPlaybackIndicators(() => {});
+    playheadFrameId = requestAnimationFrame(playheadFrame);
+}
+
+function stopPlayheadLoop() {
+    if (playheadFrameId !== null) {
+        cancelAnimationFrame(playheadFrameId);
+        playheadFrameId = null;
+    }
+    lastPlayheadStep = null;
 }
 
 // Schedule a single step across all instruments

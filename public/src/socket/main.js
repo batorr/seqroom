@@ -4,6 +4,7 @@
 import {
     state,
     hydrateState,
+    normalizeServerTransport,
     normalizeInstrument,
     setInstrumentLockedBy,
     getDisplayNameOrDefault,
@@ -12,7 +13,6 @@ import {
 } from '../state/main.js';
 import { socketState } from '../state/audio.js';
 import { SynthTypes } from '../constants/instruments.js';
-import { clampTempo } from '../utils/helpers.js';
 import {
     renderTransport,
     renderInstruments,
@@ -32,6 +32,7 @@ import { ensureAudioContext, applyClockCorrection, getClientAbsoluteTime } from 
 import { prepareSamplerAudio, cleanupSamplerBuffers } from '../audio/instruments/sampler.js';
 import { hydrateServerLFOs, syncLFOClock } from '../audio/lfo.js';
 import { renderLFOCards, refreshParamIndicators } from '../ui/lfo-card.js';
+import { computeClockSample } from '../shared/clock-sync.js';
 
 // Initialize Socket.IO
 export const socket = io({ autoConnect: false });
@@ -131,6 +132,31 @@ function failPendingRoomRequest(errorCode) {
     }
 }
 
+// The server pings every 2 s; right after (re)joining, a short burst of
+// client-initiated probes gets the clock offset accurate within a second.
+const CLOCK_PROBE_COUNT = 8;
+const CLOCK_PROBE_INTERVAL_MS = 120;
+
+function probeServerClock() {
+    for (let index = 0; index < CLOCK_PROBE_COUNT; index += 1) {
+        window.setTimeout(() => {
+            if (!socket.connected) {
+                return;
+            }
+            const clientSendTime = getClientAbsoluteTime();
+            socket.emit('time:request', {}, (response = {}) => {
+                const { serverReceiveTime, serverResponseTime } = response;
+                if (!Number.isFinite(serverReceiveTime) || !Number.isFinite(serverResponseTime)) {
+                    return;
+                }
+                const clientReceiveTime = getClientAbsoluteTime();
+                const { offsetMs, rttMs } = computeClockSample(clientSendTime, serverReceiveTime, serverResponseTime, clientReceiveTime);
+                applyClockCorrection(offsetMs, rttMs);
+            });
+        }, index * CLOCK_PROBE_INTERVAL_MS);
+    }
+}
+
 // Setup socket event listeners
 export function setupSocketEvents() {
     socket.on('connect_error', (error) => {
@@ -159,6 +185,7 @@ export function setupSocketEvents() {
     });
 
     socket.on('state:init', (payload) => {
+        probeServerClock();
         hydrateState(payload);
         state.roomSlug = payload.roomSlug || payload.slug || state.roomSlug || null;
         state.membershipRole = payload.role || state.membershipRole || 'guest';
@@ -185,23 +212,16 @@ export function setupSocketEvents() {
     });
 
     socket.on('transport:update', (transport) => {
-        state.transport = {
-            bpm: clampTempo(transport.bpm ?? state.transport.bpm),
-            playing: Boolean(transport.playing),
-            sessionStartTime: transport.sessionStartTime ?? null,
-            lastScheduledStart: transport.lastScheduledStart ?? null,
-        };
+        const previous = state.transport;
+        state.transport = normalizeServerTransport(transport);
+        const restarted = state.transport.playing
+            && (!previous.playing || previous.playId !== state.transport.playId);
         renderTransport();
         syncAudioScheduler();
-        syncLFOClock();
+        syncLFOClock({ restarted });
     });
-
-    socket.on('tempo:update', (tempo) => {
-        // Legacy clients still rely on this event. Keep transport in sync.
-        state.transport.bpm = clampTempo(tempo);
-        renderTransport();
-        syncAudioScheduler();
-    });
+    // The server still emits the legacy `tempo:update` for old clients; the
+    // timeline in `transport:update` already carries the tempo.
 
     socket.on('instrument:added', (instrument) => {
         const normalized = normalizeInstrument(instrument);
@@ -323,10 +343,8 @@ export function setupSocketEvents() {
             return;
         }
 
-        const offsetSample = ((serverReceiveTime - clientSendTime) + (serverResponseTime - clientReceiveTime)) / 2;
-        const delaySample = Math.max(0, (clientReceiveTime - clientSendTime) - (serverResponseTime - serverReceiveTime));
-
-        applyClockCorrection(offsetSample, delaySample);
+        const { offsetMs, rttMs } = computeClockSample(clientSendTime, serverReceiveTime, serverResponseTime, clientReceiveTime);
+        applyClockCorrection(offsetMs, rttMs);
     });
 
     socket.on('connections:update', (count) => updateConnectionsDisplay(count));
