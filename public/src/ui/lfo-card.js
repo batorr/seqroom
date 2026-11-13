@@ -139,11 +139,11 @@ export function refreshParamIndicators() {
 export function renderLFOCards() {
     if (!_lfoListEl) return;
     _lfoListEl.innerHTML = '';
-    getLFOs().forEach(lfo => _lfoListEl.appendChild(buildCard(lfo)));
+    [...getLFOs().values()].forEach((lfo, index) => _lfoListEl.appendChild(buildCard(lfo, index)));
     refreshParamIndicators();
 }
 
-function buildCard(lfo) {
+function buildCard(lfo, index) {
     const isMappingThis = getMappingLFOId() === lfo.id;
     const card = document.createElement('div');
     card.className = 'lfo-card' + (isMappingThis ? ' lfo-mapping-active' : '');
@@ -155,7 +155,8 @@ function buildCard(lfo) {
 
     const name = document.createElement('span');
     name.className = 'lfo-name';
-    name.textContent = lfo.name;
+    // LFOs carry no name of their own; number them in list order.
+    name.textContent = lfo.name || `LFO ${index + 1}`;
 
     const mapBtn = document.createElement('button');
     mapBtn.className = 'lfo-map-btn' + (isMappingThis ? ' active' : '');
@@ -354,14 +355,14 @@ function drawCanvas(canvas, lfo) {
     ctx.clearRect(0, 0, W, H);
 
     // Centerline
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = '#e7e7e2';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, H / 2);
     ctx.lineTo(W, H / 2);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(129, 140, 248, 0.9)';
+    ctx.strokeStyle = '#141414';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
 

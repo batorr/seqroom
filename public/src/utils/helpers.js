@@ -162,12 +162,12 @@ export function createDefaultSamplerSlot(slotId) {
 }
 
 // UI helpers
+// The pitch button carries no text; the caller adds its icon and label.
 export function createPitchSelect(selected) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'step-pitch-select';
     const initial = NOTE_OPTIONS.includes(selected) ? selected : 'C3';
     button.dataset.pitch = initial;
-    button.textContent = initial;
     return button;
 }

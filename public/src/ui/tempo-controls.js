@@ -4,7 +4,7 @@
 import { state } from '../state/main.js';
 import { TEMPO_MIN, TEMPO_MAX } from '../constants/audio.js';
 import { clampTempo } from '../utils/helpers.js';
-import { tempoSlider, tempoInputField, tempoValueEl } from './main.js';
+import { tempoSlider, tempoInputField, tempoDownBtn, tempoUpBtn } from './main.js';
 
 // Tempo input state
 // sliderActive: the user is dragging the slider; holdUntil: just released,
@@ -27,7 +27,6 @@ export function updateTempoDisplay(value, { force = false } = {}) {
     const sliderBusy = tempoInputState.sliderActive || performance.now() < tempoInputState.holdUntil;
     if (force || !sliderBusy) {
         tempoSlider.value = String(bpm);
-        tempoValueEl.textContent = `${bpm} BPM`;
     }
     if (force || !tempoInputState.manualEditing) {
         tempoInputField.value = String(bpm);
@@ -101,6 +100,16 @@ export function setupTempoControls(socket) {
             finishSliderEdit();
         }
     });
+
+    // -/+ nudge by 1 BPM (10 with Shift), from whatever is currently shown.
+    const nudgeTempo = (direction, event) => {
+        const current = Number(tempoInputField?.value) || state.transport.bpm;
+        const amount = event?.shiftKey ? 10 : 1;
+        tempoInputState.manualEditing = false;
+        commitTempo(current + direction * amount, socket, { final: true });
+    };
+    tempoDownBtn?.addEventListener('click', (event) => nudgeTempo(-1, event));
+    tempoUpBtn?.addEventListener('click', (event) => nudgeTempo(1, event));
 
     if (tempoInputField) {
         tempoInputField.type = 'number';

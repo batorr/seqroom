@@ -43,7 +43,7 @@ Open the local URL in a browser. LAN addresses are printed for every external IP
   - `public/src/constants/` – tempo bounds, room-id regex, instrument metadata, sampler limits.
   - `public/src/utils/` – value clamping, formatting, room-id helpers, sampler slot creation, note/recording helpers.
   - `public/src/state/` – shared transport/instrument/UI state plus AudioContext/recorder/socket metadata.
-  - `public/src/ui/` – DOM rendering (main view, instrument cards, sidebar, tempo controls).
+  - `public/src/ui/` – DOM rendering (main view, score rows and inspector, LFO cards, tempo controls).
   - `public/src/audio/` – AudioContext bootstrap, scheduler, recording controller, instrument renderers, sampler decoder.
   - `public/src/socket/main.js` – Socket.IO client, room lifecycle, transport commands, instrument updates, time sync.
   - `public/recording-processor.js` – AudioWorklet used by `audio/recording.js`.
@@ -61,9 +61,9 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 
 ### Instruments and Steps
 - Open the synth modal to add TB-303, TR-808, Poly Synth, or Sampler instruments.
-- Each instrument card contains a template-specific step grid (melodic notes, TR-808 drum layers, sampler slot toggles) plus parameter controls.
+- Each instrument is a row of the score with type-specific lanes (TB-303 accent/note/pitch/slide, poly note/pitch, one lane per TR-808 voice or sampler slot); the selected instrument's parameters show in the inspector below the score.
 - Step counts can be set between 1 and 128 per instrument.
-- Locks prevent conflicting edits; the sidebar shows who holds each instrument if the server reports a lock owner.
+- Locks prevent conflicting edits; an instrument locked by someone else shows "Locked" and its steps and parameters are disabled.
 
 ### Tempo and Transport
 - Tempo slider and numeric input both clamp to 30–300 BPM. Changes emit `transport:set-tempo` and reschedule playback on every client.
@@ -93,9 +93,9 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 1. `npm install` completes without errors.
 2. `npm start` prints local and network URLs.
 3. The landing page loads and shows Create/Join buttons.
-4. Creating a room reveals the sequencer, transport controls, and sidebar toggle.
-5. Adding instruments shows their cards; step toggles immediately update the UI.
-6. Tempo changes update the numeric field and slider and broadcast to all clients.
+4. Creating a room reveals the transport, the score and the room bar in the header.
+5. Adding instruments adds rows to the score; step toggles immediately update the UI.
+6. Tempo changes update the tempo number and ruler and broadcast to all clients.
 7. Two browsers in the same room stay in sync (offset/RTT reported in the banner).
 8. Recording downloads a WAV and resets the UI state after stopping.
 

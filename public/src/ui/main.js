@@ -3,7 +3,6 @@
 
 import { state, getDisplayNameOrDefault } from '../state/main.js';
 import { socketState } from '../state/audio.js';
-import { initializeSidebar, renderInstrumentSidebar, setSidebarToggleVisible } from './sidebar.js';
 
 // DOM Element References
 export const landingEl = document.getElementById('landing');
@@ -21,7 +20,17 @@ export const syncStatusEl = document.getElementById('sync-status');
 export const connectionsEl = document.getElementById('connections');
 export const tempoSlider = document.getElementById('tempo');
 export const tempoInputField = document.getElementById('tempo-input');
-export const tempoValueEl = document.getElementById('tempo-value');
+export const tempoDownBtn = document.getElementById('tempo-down');
+export const tempoUpBtn = document.getElementById('tempo-up');
+export const roomBarEl = document.getElementById('room-bar');
+export const scoreMetaEl = document.getElementById('score-meta');
+export const instrumentInspectorEl = document.getElementById('instrument-inspector');
+export const inspectorEmptyEl = document.getElementById('inspector-empty');
+export const inspectorTemplate = document.getElementById('instrument-inspector-template');
+export const scoreRulerCells = Array.from(document.querySelectorAll('.score-ruler [data-col]'));
+export const positionBarEl = document.getElementById('position-bar');
+export const positionBeatEl = document.getElementById('position-beat');
+export const positionStepEl = document.getElementById('position-step');
 export const instrumentListEl = document.getElementById('instrument-list');
 export const instrumentEmptyEl = document.getElementById('instrument-empty');
 export const addSynthModal = document.getElementById('add-synth-modal');
@@ -36,8 +45,6 @@ export const aboutModal = document.getElementById('about-modal');
 export const closeAboutModalBtn = document.getElementById('close-about-modal');
 export const footerAboutLink = document.getElementById('footer-about-link');
 
-initializeSidebar();
-renderInstrumentSidebar();
 
 // View management
 export function showSequencer() {
@@ -46,7 +53,7 @@ export function showSequencer() {
     transportToggleBtn.disabled = false;
     showRoomCodeHint('');
     updateRoomDisplay();
-    setSidebarToggleVisible(true);
+    roomBarEl?.classList.remove('hidden');
     if (inviteRoomBtn) {
         inviteRoomBtn.disabled = !state.isInRoom;
     }
@@ -56,7 +63,7 @@ export function showLanding() {
     landingEl.classList.remove('hidden');
     sequencerEl.classList.add('hidden');
     transportToggleBtn.disabled = true;
-    setSidebarToggleVisible(false);
+    roomBarEl?.classList.add('hidden');
     if (inviteRoomBtn) {
         inviteRoomBtn.disabled = true;
     }
@@ -69,7 +76,7 @@ export function updateRoomDisplay() {
     }
     const hasRoom = state.isInRoom && (state.roomSlug || state.roomId);
     const label = hasRoom ? (state.roomSlug || state.roomId) : '—';
-    roomDisplayEl.textContent = `Room: ${label}`;
+    roomDisplayEl.textContent = label;
 }
 
 // Modal management
@@ -87,8 +94,8 @@ export function renderTransport() {
         updateTempoDisplay(state.transport.bpm);
     }).catch(console.error);
 
-    transportToggleBtn.textContent = state.transport.playing ? 'Stop' : 'Play';
     transportToggleBtn.classList.toggle('playing', state.transport.playing);
+    transportToggleBtn.setAttribute('aria-label', state.transport.playing ? 'Stop' : 'Play');
     transportToggleBtn.disabled = !state.isInRoom;
     updateRoomDisplay();
     if (inviteRoomBtn) {
@@ -151,7 +158,6 @@ export function renderInstruments() {
         instrumentListEl.innerHTML = '';
         instrumentListEl.appendChild(fragment);
         renderEmptyState();
-        renderInstrumentSidebar();
         updateActiveInstrumentHighlight();
 
         import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
@@ -163,14 +169,13 @@ export function renderInstruments() {
 // Connection and sync status
 export function updateConnectionsDisplay(count) {
     if (!state.isInRoom) {
-        connectionsEl.textContent = 'Not connected';
+        connectionsEl.textContent = '—';
         return;
     }
     if (!Number.isFinite(count)) {
         return;
     }
-    const label = count === 1 ? 'person' : 'people';
-    connectionsEl.textContent = `${count} ${label} connected`;
+    connectionsEl.textContent = count === 1 ? 'Just you' : `${count} people`;
 }
 
 export function updateSyncStatus() {
@@ -179,18 +184,21 @@ export function updateSyncStatus() {
     }
 
     if (!state.isInRoom) {
-        syncStatusEl.textContent = 'Join a room to sync';
+        syncStatusEl.textContent = '—';
+        syncStatusEl.removeAttribute('title');
         return;
     }
 
     if (!socketState.hasSyncSample) {
-        syncStatusEl.textContent = 'Syncing clock…';
+        syncStatusEl.textContent = 'Syncing…';
+        syncStatusEl.removeAttribute('title');
         return;
     }
 
     const offsetLabel = socketState.clockOffsetMs.toFixed(1);
     const latencyLabel = socketState.latencyEstimateMs.toFixed(1);
-    syncStatusEl.textContent = `Offset ${offsetLabel} ms · RTT ${latencyLabel} ms`;
+    syncStatusEl.textContent = `Synced · ${Math.round(socketState.latencyEstimateMs)} ms`;
+    syncStatusEl.title = `Clock offset ${offsetLabel} ms, round trip ${latencyLabel} ms`;
 }
 
 export function showRoomCodeHint(slug) {
@@ -201,14 +209,6 @@ export function showRoomCodeHint(slug) {
     }
     roomCodeDisplayEl.textContent = `Room slug: ${slug}`;
     roomCodeDisplayEl.classList.remove('hidden');
-}
-
-export function renderEmptyState() {
-    if (!state.instrumentOrder.length) {
-        instrumentEmptyEl.classList.remove('hidden');
-    } else {
-        instrumentEmptyEl.classList.add('hidden');
-    }
 }
 
 // Setup functions

@@ -38,9 +38,6 @@ export const state = {
     instrumentOrder: [],
     activeInstrumentId: null,
     tempoPreview: DEFAULT_BPM,
-    ui: {
-        sidebarOpen: false,
-    },
     membershipRole: 'guest',
     user: {
         displayName: DEFAULT_DISPLAY_NAME,
@@ -140,10 +137,6 @@ export function setActiveInstrument(instrumentId) {
     state.activeInstrumentId = instrumentId;
 }
 
-export function setSidebarOpen(isOpen) {
-    state.ui.sidebarOpen = Boolean(isOpen);
-}
-
 export function updateInstrumentParams(instrumentId, params) {
     const instrument = state.instruments.get(instrumentId);
     if (instrument) {
@@ -187,8 +180,6 @@ export function hydrateState(payload) {
     state.activeInstrumentId = nextActiveInstrumentId && state.instruments.has(nextActiveInstrumentId)
         ? nextActiveInstrumentId
         : null;
-
-    state.ui.sidebarOpen = false;
 }
 
 // Normalize instrument data

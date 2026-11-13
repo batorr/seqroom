@@ -17,12 +17,12 @@ export function setInstrumentMuted(instrumentId, muted) {
 }
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
+import { computeSlurs } from '../shared/slurs.js';
 import { SynthTypes, TR808_DRUMS, TR808_DRUM_PARAMS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
     clampValue,
-    hexToRgba,
     formatStepCountLabel,
     formatParamDisplay,
     formatBytes,
@@ -32,8 +32,18 @@ import {
     createEmptySamplerStep,
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
-import { instrumentTemplate, instrumentListEl, instrumentEmptyEl } from './main.js';
-import { updateSidebarEntry, removeInstrumentSidebarEntry, updateSidebarSelection } from './sidebar.js';
+import {
+    instrumentTemplate,
+    instrumentEmptyEl,
+    inspectorTemplate,
+    instrumentInspectorEl,
+    inspectorEmptyEl,
+    scoreMetaEl,
+    scoreRulerCells,
+    positionBarEl,
+    positionBeatEl,
+    positionStepEl,
+} from './main.js';
 
 const PITCH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const PITCH_OCTAVE_MIN = 0;
@@ -515,7 +525,7 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
         const pitchValue = formatPitchValue(noteIndex, octave);
         if (selectEl) {
             selectEl.dataset.pitch = pitchValue;
-            selectEl.textContent = pitchValue;
+            setPitchButtonLabel(selectEl, stepIndex, pitchValue);
         }
         noteEl.textContent = pitchValue;
         const previousPitch = step.pitch;
@@ -589,7 +599,6 @@ export function renderInstrument(instrumentId) {
     updateInstrumentCard(card, instrument);
     renderEmptyState();
     updateActiveInstrumentHighlight();
-    updateSidebarEntry(instrument.id);
 
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
@@ -608,11 +617,22 @@ export function setActiveInstrument(instrumentId, options = {}) {
     }
 }
 
+// The selected instrument is marked in the score and its settings fill the
+// inspector below it; with nothing selected the first instrument is shown.
 export function updateActiveInstrumentHighlight() {
-    socketState.instrumentElements.forEach(({ root }, instrumentId) => {
-        root.classList.toggle('active', instrumentId === state.activeInstrumentId);
+    if (!state.activeInstrumentId || !state.instruments.has(state.activeInstrumentId)) {
+        state.activeInstrumentId = state.instrumentOrder.find((id) => state.instruments.has(id)) || null;
+    }
+    socketState.instrumentElements.forEach((entry, instrumentId) => {
+        const isActive = instrumentId === state.activeInstrumentId;
+        entry.root.classList.toggle('active', isActive);
+        if (entry.inspector) {
+            entry.inspector.hidden = !isActive;
+        }
     });
-    updateSidebarSelection();
+    if (inspectorEmptyEl) {
+        inspectorEmptyEl.classList.toggle('hidden', Boolean(state.activeInstrumentId));
+    }
 }
 
 function focusInstrumentCard(instrumentId, { scrollIntoView, focus }) {
@@ -879,35 +899,44 @@ export function ensureInstrumentCard(instrument) {
     const bodyContainer = node.querySelector('.synth-body');
     const collapseToggle = node.querySelector('.collapse-toggle');
 
-    const removeBtn = node.querySelector('.remove-instrument');
+    // The score row holds the steps; the inspector panel (shown while this
+    // instrument is selected) holds its name, step controls and parameters.
+    const inspector = inspectorTemplate.content.firstElementChild.cloneNode(true);
+    inspector.dataset.instrumentId = instrument.id;
+    inspector.hidden = true;
+    instrumentInspectorEl.appendChild(inspector);
+
+    const removeBtn = inspector.querySelector('.remove-instrument');
     removeBtn.addEventListener('click', () => {
         if (!socket) return;
         socket.emit('instrument:remove', { instrumentId: instrument.id });
     });
 
-    node.addEventListener('click', (event) => {
-        if (event.target.closest('.remove-instrument')) {
-            return;
-        }
+    node.addEventListener('click', () => {
         const targetId = node.dataset.instrumentId;
-        if (targetId) {
+        if (targetId && state.activeInstrumentId !== targetId) {
             setActiveInstrument(targetId);
         }
     });
 
     const cardEntry = {
         root: node,
+        inspector,
         bodyContainer,
         collapseButton: collapseToggle,
-        paramsContainer: node.querySelector('.synth-params'),
+        paramsContainer: inspector.querySelector('.synth-params'),
         stepGrid: node.querySelector('.step-grid'),
         stepRefs: [],
+        playingIndex: -1,
         drumSelector: null,
         activeDrum: 'kick',
         activeSamplerSlot: SAMPLER_SLOT_IDS[0],
         stepControl: null,
-        nameEl: node.querySelector('.instrument-name'),
-        renameButton: node.querySelector('.rename-instrument'),
+        rowNameEl: node.querySelector('.instrument-name'),
+        nameEl: inspector.querySelector('.inspector-name'),
+        typeEl: node.querySelector('.synth-type'),
+        inspectorTypeEl: inspector.querySelector('.inspector-type'),
+        renameButton: inspector.querySelector('.rename-instrument'),
         renameInput: null,
         removeButton: removeBtn,
         lockButton: null,
@@ -921,12 +950,13 @@ export function ensureInstrumentCard(instrument) {
             beginInstrumentRename(instrument.id);
         });
     }
-    if (cardEntry.nameEl) {
-        cardEntry.nameEl.addEventListener('dblclick', (event) => {
+    [cardEntry.nameEl, cardEntry.rowNameEl].forEach((nameEl) => {
+        nameEl?.addEventListener('dblclick', (event) => {
             event.stopPropagation();
+            setActiveInstrument(instrument.id);
             beginInstrumentRename(instrument.id);
         });
-    }
+    });
 
     // Create step controls
     const controlsRow = document.createElement('div');
@@ -1096,11 +1126,8 @@ export function ensureInstrumentCard(instrument) {
         }
     });
 
-    const nameGroup = node.querySelector('.synth-name-group');
-    if (nameGroup) {
-        nameGroup.appendChild(muteButton);
-        nameGroup.appendChild(lockButton);
-    }
+    const actions = node.querySelector('.synth-actions') || node.querySelector('.synth-header');
+    actions.append(muteButton, lockButton);
     cardEntry.lockButton = lockButton;
     cardEntry.muteButton = muteButton;
 
@@ -1220,15 +1247,11 @@ export function ensureInstrumentCard(instrument) {
         manualEditing: manualStepState,
     };
 
+    // Sampler slot strip (upload, replace, clear) sits above the parameters.
     const drumSelector = document.createElement('div');
     drumSelector.className = 'drum-selector hidden';
     cardEntry.drumSelector = drumSelector;
-    const stepGridParent = cardEntry.stepGrid?.parentElement || cardEntry.bodyContainer || node;
-    if (cardEntry.stepGrid && stepGridParent) {
-        stepGridParent.insertBefore(drumSelector, cardEntry.stepGrid);
-    } else if (stepGridParent) {
-        stepGridParent.appendChild(drumSelector);
-    }
+    inspector.insertBefore(drumSelector, cardEntry.paramsContainer);
 
     socketState.instrumentElements.set(instrument.id, cardEntry);
 
@@ -1326,22 +1349,9 @@ function updateInstrumentLockState(entry, instrument) {
 
     if (entry.stepRefs) {
         entry.stepRefs.forEach((ref) => {
-            if (ref.toggleBtn) {
-                setLockedDisabled(ref.toggleBtn, disableControls);
-                ref.disabled = ref.toggleBtn.disabled;
-            } else if (typeof ref.disabled !== 'boolean') {
-                ref.disabled = disableControls;
-            }
-            [ref.accentBtn, ref.slideBtn].forEach((button) => {
-                if (button) {
-                    setLockedDisabled(button, disableControls);
-                }
-            });
-            if (ref.pitchSelect) {
-                setLockedDisabled(ref.pitchSelect, disableControls);
-                if (!ref.baseDisabled) {
-                    ref.pitchSelect.classList.toggle('step-select-disabled', ref.pitchSelect.disabled);
-                }
+            (ref.buttons || []).forEach((button) => setLockedDisabled(button, disableControls));
+            if (ref.pitchSelect && !ref.baseDisabled) {
+                ref.pitchSelect.classList.toggle('step-select-disabled', ref.pitchSelect.disabled);
             }
         });
     }
@@ -1359,39 +1369,39 @@ export function updateInstrumentCard(card, instrument) {
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
-
-    if (entry) {
-        entry.nameEl = card.querySelector('.instrument-name');
-        if (!entry.lockButton) {
-            entry.lockButton = card.querySelector('.instrument-lock-button');
-        }
-        if (!entry.bodyContainer) {
-            entry.bodyContainer = card.querySelector('.synth-body');
-        }
-        if (!entry.collapseButton) {
-            entry.collapseButton = card.querySelector('.collapse-toggle');
-        }
-        ensureCollapseBindings(entry, instrument.id);
-        bindCollapseToggle(entry, instrument.id);
-        const currentCollapsed = entry.isCollapsed ?? entry.root.classList.contains('collapsed');
-        applyCollapseState(entry, instrument.id, currentCollapsed, { persist: false });
+    if (!entry) {
+        return;
     }
-    const titleEl = entry?.nameEl || card.querySelector('.instrument-name');
-    const typeEl = card.querySelector('.synth-type');
+
+    ensureCollapseBindings(entry, instrument.id);
+    bindCollapseToggle(entry, instrument.id);
+    const currentCollapsed = entry.isCollapsed ?? entry.root.classList.contains('collapsed');
+    applyCollapseState(entry, instrument.id, currentCollapsed, { persist: false });
+
     const displayName = instrument.name || definition.label;
-    if (entry && entry.renameInput) {
-        entry.renameInput.value = displayName;
-    } else if (titleEl) {
-        titleEl.textContent = displayName;
+    if (entry.rowNameEl) {
+        entry.rowNameEl.textContent = displayName;
+        entry.rowNameEl.title = displayName;
     }
-    if (typeEl) {
-        const typeLabel = definition.typeLabel || instrument.type;
-        const creatorName = instrument.creatorDisplayName;
-        typeEl.textContent = creatorName ? `${typeLabel} by ${creatorName}` : typeLabel;
+    if (entry.renameInput) {
+        entry.renameInput.value = displayName;
+    } else if (entry.nameEl) {
+        entry.nameEl.textContent = displayName;
+    }
+    const typeLabel = definition.typeLabel || instrument.type;
+    const creatorName = instrument.creatorDisplayName;
+    const typeText = creatorName ? `${typeLabel} · ${creatorName}` : typeLabel;
+    if (entry.typeEl) {
+        entry.typeEl.textContent = typeText;
+    }
+    if (entry.inspectorTypeEl) {
+        entry.inspectorTypeEl.textContent = typeText;
+    }
+    if (entry.inspector) {
+        entry.inspector.setAttribute('aria-label', `${displayName} settings`);
     }
 
-    const paramsContainer = entry.paramsContainer;
-    renderParamControls(paramsContainer, instrument, definition);
+    renderParamControls(entry.paramsContainer, instrument, definition);
 
     if (entry.stepControl) {
         const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
@@ -1411,20 +1421,17 @@ export function updateInstrumentCard(card, instrument) {
         }
     }
 
-    if (entry.fillButton) {
-        const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
-        const allFilled = _areAllStepsFilled(instrument, stepCount, entry.activeDrum, entry.activeSamplerSlot);
-        entry.fillButton.textContent = allFilled ? 'Clear' : 'Fill';
+    updateFillButtonLabel(entry, instrument);
+
+    if (instrument.type === SynthTypes.TR808
+        && (!entry.activeDrum || !TR808_DRUMS.some((drum) => drum.id === entry.activeDrum))) {
+        entry.activeDrum = TR808_DRUMS[0].id;
     }
 
+    // 808 voices are picked from the score's row labels; only the sampler
+    // needs its slot strip in the inspector.
     if (entry.drumSelector) {
-        if (instrument.type === SynthTypes.TR808) {
-            entry.drumSelector.classList.remove('hidden');
-            if (!entry.activeDrum || !TR808_DRUMS.some((drum) => drum.id === entry.activeDrum)) {
-                entry.activeDrum = TR808_DRUMS[0].id;
-            }
-            renderDrumSelector(entry, instrument);
-        } else if (instrument.type === SynthTypes.SAMPLER) {
+        if (instrument.type === SynthTypes.SAMPLER) {
             entry.drumSelector.classList.remove('hidden');
             if (!entry.activeSamplerSlot || !SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)) {
                 entry.activeSamplerSlot = SAMPLER_SLOT_IDS[0];
@@ -1432,14 +1439,23 @@ export function updateInstrumentCard(card, instrument) {
             renderSamplerSelector(entry, instrument, definition);
         } else {
             entry.drumSelector.classList.add('hidden');
+            entry.drumSelector.innerHTML = '';
         }
     }
 
-    const stepGrid = entry.stepGrid;
-    renderStepGrid(stepGrid, instrument);
+    renderStepGrid(entry.stepGrid, instrument);
 
     updateInstrumentLockState(entry, instrument);
     syncInstrumentMuteState(entry, instrument);
+}
+
+function updateFillButtonLabel(entry, instrument) {
+    if (!entry?.fillButton) {
+        return;
+    }
+    const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+    const allFilled = _areAllStepsFilled(instrument, stepCount, entry.activeDrum, entry.activeSamplerSlot);
+    entry.fillButton.textContent = allFilled ? 'Clear' : 'Fill';
 }
 
 export function removeInstrumentCard(instrumentId) {
@@ -1457,8 +1473,8 @@ export function removeInstrumentCard(instrumentId) {
         entry.renameInput = null;
     }
     entry.root.remove();
+    entry.inspector?.remove();
     socketState.instrumentElements.delete(instrumentId);
-    removeInstrumentSidebarEntry(instrumentId);
     import('../audio/instruments/sampler.js').then(({ cleanupSamplerBuffers }) => {
         cleanupSamplerBuffers(instrumentId);
     }).catch(console.error);
@@ -1468,68 +1484,57 @@ export function removeInstrumentCard(instrumentId) {
 }
 
 export function renderEmptyState() {
-    if (!state.instrumentOrder.length) {
-        instrumentEmptyEl.classList.remove('hidden');
-    } else {
-        instrumentEmptyEl.classList.add('hidden');
+    const count = state.instrumentOrder.length;
+    instrumentEmptyEl.classList.toggle('hidden', count > 0);
+    if (scoreMetaEl) {
+        scoreMetaEl.textContent = count === 1 ? '1 instrument, 4/4' : `${count} instruments, 4/4`;
     }
 }
 
+// Highlights the audible step in every instrument's lanes, the score ruler
+// and the bar/beat/step readout. Only cells whose state changes are touched.
 export function updatePlaybackIndicators(stepIndex) {
-    socketState.instrumentElements.forEach(({ stepRefs }, instrumentId) => {
+    const playing = Boolean(state.transport.playing) && stepIndex >= 0;
+
+    socketState.instrumentElements.forEach((entry, instrumentId) => {
+        const { stepRefs } = entry;
         if (!stepRefs || !stepRefs.length) {
             return;
         }
-
         const instrument = state.instruments.get(instrumentId);
-        if (!instrument) {
-            stepRefs.forEach((ref) => ref.cell.classList.remove('playing'));
+        let nextIndex = -1;
+        if (instrument && playing) {
+            const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+            const normalizedIndex = instrumentStepCount > 0 ? stepIndex % instrumentStepCount : -1;
+            const ref = stepRefs[normalizedIndex];
+            if (ref && normalizedIndex < instrumentStepCount && !ref.disabled) {
+                nextIndex = normalizedIndex;
+            }
+        }
+        if (nextIndex === entry.playingIndex) {
             return;
         }
-
-        const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
-        const normalizedIndex = stepIndex >= 0 && instrumentStepCount > 0 ? stepIndex % instrumentStepCount : -1;
-
-        stepRefs.forEach((ref, index) => {
-            const canPlay = index < instrumentStepCount && !ref?.disabled;
-            const isPlaying = state.transport.playing && canPlay && normalizedIndex === index;
-            ref.cell.classList.toggle('playing', isPlaying);
-        });
+        setStepPlaying(stepRefs[entry.playingIndex], false);
+        setStepPlaying(stepRefs[nextIndex], true);
+        entry.playingIndex = nextIndex;
     });
+
+    const column = playing ? stepIndex % STEP_GRID_COLUMNS : -1;
+    scoreRulerCells.forEach((cell, index) => {
+        cell.classList.toggle('playing', index === column);
+    });
+    if (positionBarEl && positionBeatEl && positionStepEl) {
+        positionBarEl.textContent = playing ? String(Math.floor(stepIndex / STEP_GRID_COLUMNS) + 1) : '–';
+        positionBeatEl.textContent = playing ? String(Math.floor((stepIndex % STEP_GRID_COLUMNS) / 4) + 1) : '–';
+        positionStepEl.textContent = playing ? String((stepIndex % STEP_GRID_COLUMNS) + 1) : '–';
+    }
 }
 
-// Drum selector
-function renderDrumSelector(entry, instrument) {
-    const container = entry.drumSelector;
-    container.innerHTML = '';
-
-    TR808_DRUMS.forEach((drum) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'drum-button';
-        button.dataset.drum = drum.id;
-        button.textContent = drum.label;
-        button.style.setProperty('--drum-color', drum.color);
-        if (entry.activeDrum === drum.id) {
-            button.classList.add('active');
-        }
-
-        button.addEventListener('click', () => {
-            if (entry.activeDrum === drum.id) {
-                return;
-            }
-            entry.activeDrum = drum.id;
-            renderDrumSelector(entry, instrument);
-            renderParamControls(entry.paramsContainer, instrument, INSTRUMENT_LIBRARY[instrument.type]);
-            renderStepGrid(entry.stepGrid, instrument);
-            updateInstrumentLockState(entry, instrument);
-            import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-                updatePlaybackIndicators(getCurrentStepIndex());
-            }).catch(console.error);
-        });
-
-        container.appendChild(button);
-    });
+function setStepPlaying(ref, isPlaying) {
+    if (!ref) {
+        return;
+    }
+    (ref.cells || [ref.cell]).forEach((cell) => cell?.classList.toggle('playing', isPlaying));
 }
 
 // Sampler selector and controls
@@ -1560,19 +1565,9 @@ function renderSamplerSelector(entry, instrument, definition) {
         if (slotId === activeSlot) {
             selectBtn.classList.add('active');
         }
-        selectBtn.addEventListener('click', () => {
-            if (entry.activeSamplerSlot === slotId) {
-                return;
-            }
-            entry.activeSamplerSlot = slotId;
-            renderSamplerSelector(entry, instrument, definition);
-            renderParamControls(entry.paramsContainer, instrument, definition);
-            renderStepGrid(entry.stepGrid, instrument);
-            updateInstrumentLockState(entry, instrument);
-            import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
-                updatePlaybackIndicators(getCurrentStepIndex());
-            }).catch(console.error);
-        });
+        selectBtn.setAttribute('aria-label', `Edit slot ${slotId}`);
+        selectBtn.setAttribute('aria-pressed', String(slotId === activeSlot));
+        selectBtn.addEventListener('click', () => selectSamplerSlot(entry, instrument.id, slotId));
 
         const infoLabel = document.createElement('span');
         infoLabel.className = 'sampler-slot-info';
@@ -1989,13 +1984,26 @@ export function renderParamControls(container, instrument, definition) {
     }
 
     let paramDefs = definition.params || [];
+    let groupTitleBefore = null;
     if (instrument.type === SynthTypes.TR808) {
+        // Instrument-wide params first, then the voice picked in the score.
         const entry = socketState.instrumentElements.get(instrument.id);
         const activeDrum = entry?.activeDrum || 'kick';
-        paramDefs = [...paramDefs, ...(TR808_DRUM_PARAMS[activeDrum] || [])];
+        const drumParams = TR808_DRUM_PARAMS[activeDrum] || [];
+        if (drumParams.length) {
+            const drumLabel = TR808_DRUMS.find((drum) => drum.id === activeDrum)?.label || activeDrum;
+            groupTitleBefore = { key: drumParams[0].key, title: drumLabel };
+        }
+        paramDefs = [...paramDefs, ...drumParams];
     }
 
     paramDefs.forEach((paramDef) => {
+        if (groupTitleBefore && groupTitleBefore.key === paramDef.key) {
+            const title = document.createElement('h4');
+            title.className = 'param-group-title';
+            title.textContent = groupTitleBefore.title;
+            container.appendChild(title);
+        }
         const control = document.createElement('div');
         control.className = 'param-control';
         control.dataset.instrumentId = instrument.id;
@@ -2006,9 +2014,15 @@ export function renderParamControls(container, instrument, definition) {
             control.dataset.paramLabel = paramDef.label;
         }
 
-        const label = document.createElement('label');
-        label.htmlFor = `${instrument.id}-${paramDef.key}`;
+        const controlId = `${instrument.id}-${paramDef.key}`;
+        const label = document.createElement(paramDef.type === 'select' ? 'span' : 'label');
+        label.className = 'param-label';
         label.textContent = paramDef.label;
+        if (paramDef.type === 'select') {
+            label.id = `${controlId}-label`;
+        } else {
+            label.htmlFor = controlId;
+        }
 
         control.appendChild(label);
 
@@ -2045,8 +2059,6 @@ export function renderParamControls(container, instrument, definition) {
 
                 instrument.params[paramDef.key] = numericValue;
 
-                updateSidebarEntry(instrument.id);
-
                 const paramsPayload = createInstrumentParamUpdate(instrument, paramDef, numericValue);
                 if (!paramsPayload) {
                     return;
@@ -2063,23 +2075,36 @@ export function renderParamControls(container, instrument, definition) {
             control.appendChild(input);
             control.appendChild(valueBadge);
         } else if (paramDef.type === 'select') {
-            const select = document.createElement('select');
-            select.id = `${instrument.id}-${paramDef.key}`;
-            (paramDef.options || []).forEach((option) => {
-                const opt = document.createElement('option');
-                opt.value = option.value;
-                opt.textContent = option.label;
-                select.appendChild(opt);
-            });
-            select.value = instrument.params[paramDef.key] ?? paramDef.options?.[0]?.value ?? '';
-            select.addEventListener('change', () => {
-                if (!socket) return;
-                socket.emit('instrument:param', {
-                    instrumentId: instrument.id,
-                    params: { [paramDef.key]: select.value },
+            // A handful of options: shown as a segmented control.
+            control.classList.add('is-choice');
+            const group = document.createElement('div');
+            group.className = 'segmented';
+            group.setAttribute('role', 'group');
+            group.setAttribute('aria-labelledby', label.id);
+            const options = paramDef.options || [];
+            const current = instrument.params?.[paramDef.key] ?? options[0]?.value ?? '';
+            const buttons = options.map((option) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = option.label;
+                button.dataset.value = option.value;
+                button.setAttribute('aria-pressed', String(option.value === current));
+                button.addEventListener('click', () => {
+                    buttons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)));
+                    if (!instrument.params || typeof instrument.params !== 'object') {
+                        instrument.params = {};
+                    }
+                    instrument.params[paramDef.key] = option.value;
+                    if (!socket) return;
+                    socket.emit('instrument:param', {
+                        instrumentId: instrument.id,
+                        params: { [paramDef.key]: option.value },
+                    });
                 });
+                group.appendChild(button);
+                return button;
             });
-            control.appendChild(select);
+            control.appendChild(group);
         }
 
         container.appendChild(control);
@@ -2100,6 +2125,82 @@ export function createInstrumentParamUpdate(instrument, paramDef, value) {
 }
 
 // Step grid rendering
+//
+// Every instrument is drawn as lanes on the shared 16-column score: one lane
+// label column, then 16 step cells. Patterns longer than 16 steps wrap onto
+// further lines, so step N of every instrument sits in the same column.
+// stepRefs[i] collects everything belonging to step i across the lanes.
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function createIcon(viewBox, pathData, { fill = 'none', strokeWidth = '1.6' } = {}) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', viewBox);
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', pathData);
+    path.setAttribute('fill', fill);
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', strokeWidth);
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+    return svg;
+}
+
+function setPitchButtonLabel(button, stepIndex, pitch) {
+    button.setAttribute('aria-label', `Change pitch of step ${stepIndex + 1} (${pitch})`);
+    button.title = `Pitch: ${pitch}`;
+}
+
+function createStepLane(laneClass, labelText) {
+    const lane = document.createElement('div');
+    lane.className = `step-lane ${laneClass}`;
+    const label = document.createElement('span');
+    label.className = 'lane-label';
+    label.textContent = labelText;
+    lane.appendChild(label);
+    return lane;
+}
+
+function createStepCell(index, withinPattern) {
+    const cell = document.createElement('div');
+    cell.className = 'step-cell';
+    cell.classList.toggle('beat', index % 4 === 0);
+    cell.classList.toggle('step-disabled', !withinPattern);
+    return cell;
+}
+
+// Splits the visible steps into 16-step lines; returns the line containers.
+function createStepLines(container, visibleSteps) {
+    const lineCount = Math.max(1, Math.ceil(visibleSteps / STEP_GRID_COLUMNS));
+    const lines = [];
+    for (let line = 0; line < lineCount; line += 1) {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'step-line';
+        if (lineCount > 1) {
+            const head = document.createElement('div');
+            head.className = 'step-line-head';
+            const first = line * STEP_GRID_COLUMNS + 1;
+            const range = document.createElement('span');
+            range.textContent = `${first}–${first + STEP_GRID_COLUMNS - 1}`;
+            head.append(document.createElement('span'), range);
+            lineEl.appendChild(head);
+        }
+        container.appendChild(lineEl);
+        lines.push(lineEl);
+    }
+    return lines;
+}
+
+function assignStepRefs(entry, stepRefs) {
+    if (!entry) {
+        return;
+    }
+    entry.stepRefs = stepRefs;
+    entry.playingIndex = -1;
+}
+
 export function renderStepGrid(container, instrument) {
     if (activePitchPopup) {
         closePitchPopup({ commit: false });
@@ -2119,347 +2220,413 @@ export function renderMelodicStepGrid(container, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
     const visibleSteps = getVisibleStepSlots(instrumentStepCount);
-    const activeSteps = instrumentStepCount;
+    const isAcid = instrument.type === SynthTypes.TB303;
     const stepRefs = [];
+    const slideLanes = [];
+    let refreshSlurs = () => {};
 
-    for (let i = 0; i < visibleSteps; i += 1) {
-        const patternIndex = i;
-        const withinPattern = patternIndex < activeSteps;
-
-        let step = steps[patternIndex];
-        if (!step && withinPattern) {
-            step = createEmptyMelodicStep();
-            steps[patternIndex] = step;
-        } else if (!step) {
-            step = createEmptyMelodicStep();
+    createStepLines(container, visibleSteps).forEach((lineEl, line) => {
+        const accentLane = isAcid ? createStepLane('lane-accent', 'Accent') : null;
+        const noteLane = createStepLane('lane-note', 'Note');
+        const pitchLane = createStepLane('lane-pitch', 'Pitch');
+        const slideLane = isAcid ? createStepLane('lane-slide', 'Slide') : null;
+        [accentLane, noteLane, pitchLane, slideLane].forEach((lane) => lane && lineEl.appendChild(lane));
+        if (slideLane) {
+            slideLanes.push(slideLane);
         }
 
-        const cell = document.createElement('div');
-        cell.className = 'step-cell';
+        for (let column = 0; column < STEP_GRID_COLUMNS; column += 1) {
+            const patternIndex = line * STEP_GRID_COLUMNS + column;
+            const withinPattern = patternIndex < instrumentStepCount;
 
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'step-toggle';
-        toggleBtn.dataset.stepIndex = String(patternIndex);
+            let step = steps[patternIndex];
+            if (!step && withinPattern) {
+                step = createEmptyMelodicStep();
+                steps[patternIndex] = step;
+            } else if (!step) {
+                step = createEmptyMelodicStep();
+            }
+            const pitch = NOTE_OPTIONS.includes(step.pitch) ? step.pitch : 'C3';
+            if (withinPattern) {
+                step.pitch = pitch;
+            }
 
-        const note = document.createElement('span');
-        note.className = 'step-note';
-        note.textContent = step.pitch || '—';
+            const cells = [];
+            const buttons = [];
 
-        const indexLabel = document.createElement('span');
-        indexLabel.className = 'step-index';
-        indexLabel.textContent = formatStepIndex(i, visibleSteps);
-
-        toggleBtn.appendChild(note);
-        toggleBtn.appendChild(indexLabel);
-
-        const isActive = withinPattern && Boolean(step.active);
-        toggleBtn.classList.toggle('active', isActive);
-        toggleBtn.disabled = !withinPattern;
-        cell.classList.toggle('active', isActive);
-        cell.classList.toggle('step-disabled', !withinPattern);
-
-        if (withinPattern) {
-            toggleBtn.addEventListener('click', () => {
-                const nextActive = !step.active;
-                step.active = nextActive;
-                toggleBtn.classList.toggle('active', nextActive);
-                cell.classList.toggle('active', nextActive);
-                if (!socket) return;
-                socket.emit('instrument:step', {
-                    instrumentId: instrument.id,
-                    stepIndex: patternIndex,
-                    step: { active: nextActive },
-                });
-            });
-        }
-
-        const pitchSelect = createPitchSelect(step.pitch || 'C3');
-        const initialPitch = step.pitch || pitchSelect.dataset.pitch || 'C3';
-        pitchSelect.dataset.pitch = initialPitch;
-        pitchSelect.textContent = initialPitch;
-        if (withinPattern) {
-            step.pitch = initialPitch;
-            note.textContent = initialPitch;
-            const handlePitchPopupTrigger = (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                openPitchPopup({
-                    anchorEl: pitchSelect,
-                    noteEl: note,
-                    selectEl: pitchSelect,
-                    step,
-                    instrumentId: instrument.id,
-                    stepIndex: patternIndex,
-                });
-            };
-            pitchSelect.addEventListener('click', handlePitchPopupTrigger);
-            pitchSelect.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    handlePitchPopupTrigger(event);
-                }
-            });
-        } else {
-            pitchSelect.disabled = true;
-            pitchSelect.classList.add('step-select-disabled');
-        }
-
-        cell.appendChild(toggleBtn);
-        cell.appendChild(pitchSelect);
-
-        let accentBtn = null;
-        let slideBtn = null;
-        if (instrument.type === SynthTypes.TB303) {
-            const modifiers = document.createElement('div');
-            modifiers.className = 'step-modifiers';
-
-            accentBtn = document.createElement('button');
-            accentBtn.type = 'button';
-            accentBtn.className = 'step-mod-btn step-accent-btn';
-            accentBtn.textContent = 'A';
-            accentBtn.title = 'Accent';
-            accentBtn.classList.toggle('active', Boolean(step.accent));
-            accentBtn.disabled = !withinPattern;
-
-            slideBtn = document.createElement('button');
-            slideBtn.type = 'button';
-            slideBtn.className = 'step-mod-btn step-slide-btn';
-            slideBtn.textContent = 'S';
-            slideBtn.title = 'Slide';
-            slideBtn.classList.toggle('active', Boolean(step.slide));
-            slideBtn.disabled = !withinPattern;
+            // Note: toggles the step, shows its pitch while active.
+            const noteCell = createStepCell(column, withinPattern);
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'step-toggle';
+            toggleBtn.dataset.stepIndex = String(patternIndex);
+            const note = document.createElement('span');
+            note.className = 'step-note';
+            note.textContent = pitch;
+            toggleBtn.appendChild(note);
+            const isActive = withinPattern && Boolean(step.active);
+            toggleBtn.classList.toggle('active', isActive);
+            toggleBtn.classList.toggle('accented', Boolean(step.accent));
+            toggleBtn.setAttribute('aria-pressed', String(isActive));
+            toggleBtn.setAttribute('aria-label', `Step ${patternIndex + 1}`);
+            toggleBtn.disabled = !withinPattern;
+            noteCell.classList.toggle('active', isActive);
+            noteCell.appendChild(toggleBtn);
+            noteLane.appendChild(noteCell);
 
             if (withinPattern) {
-                accentBtn.addEventListener('click', () => {
-                    const next = !step.accent;
-                    step.accent = next;
-                    accentBtn.classList.toggle('active', next);
+                toggleBtn.addEventListener('click', () => {
+                    const nextActive = !step.active;
+                    step.active = nextActive;
+                    toggleBtn.classList.toggle('active', nextActive);
+                    toggleBtn.setAttribute('aria-pressed', String(nextActive));
+                    noteCell.classList.toggle('active', nextActive);
+                    refreshSlurs();
                     if (!socket) return;
                     socket.emit('instrument:step', {
                         instrumentId: instrument.id,
                         stepIndex: patternIndex,
-                        step: { accent: next },
-                    });
-                });
-                slideBtn.addEventListener('click', () => {
-                    const next = !step.slide;
-                    step.slide = next;
-                    slideBtn.classList.toggle('active', next);
-                    if (!socket) return;
-                    socket.emit('instrument:step', {
-                        instrumentId: instrument.id,
-                        stepIndex: patternIndex,
-                        step: { slide: next },
+                        step: { active: nextActive },
                     });
                 });
             }
 
-            modifiers.appendChild(accentBtn);
-            modifiers.appendChild(slideBtn);
-            cell.appendChild(modifiers);
+            // Pitch: opens the note/octave popup.
+            const pitchCell = createStepCell(column, withinPattern);
+            const pitchSelect = createPitchSelect(pitch);
+            pitchSelect.appendChild(createIcon('0 0 10 6', 'M1 1l4 4 4-4', { strokeWidth: '1.5' }));
+            setPitchButtonLabel(pitchSelect, patternIndex, pitch);
+            if (withinPattern) {
+                const handlePitchPopupTrigger = (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openPitchPopup({
+                        anchorEl: pitchSelect,
+                        noteEl: note,
+                        selectEl: pitchSelect,
+                        step,
+                        instrumentId: instrument.id,
+                        stepIndex: patternIndex,
+                    });
+                };
+                pitchSelect.addEventListener('click', handlePitchPopupTrigger);
+            } else {
+                pitchSelect.disabled = true;
+                pitchSelect.classList.add('step-select-disabled');
+            }
+            pitchCell.appendChild(pitchSelect);
+            pitchLane.appendChild(pitchCell);
+
+            let accentBtn = null;
+            let slideBtn = null;
+            if (isAcid) {
+                const accentCell = createStepCell(column, withinPattern);
+                accentBtn = document.createElement('button');
+                accentBtn.type = 'button';
+                accentBtn.className = 'step-mod-btn step-accent-btn';
+                accentBtn.setAttribute('aria-label', `Accent, step ${patternIndex + 1}`);
+                accentBtn.appendChild(createIcon('0 0 12 10', 'M1 1l10 4-10 4', { strokeWidth: '1.8' }));
+                accentBtn.classList.toggle('active', Boolean(step.accent));
+                accentBtn.setAttribute('aria-pressed', String(Boolean(step.accent)));
+                accentBtn.disabled = !withinPattern;
+                accentCell.appendChild(accentBtn);
+                accentLane.appendChild(accentCell);
+
+                const slideCell = createStepCell(column, withinPattern);
+                slideBtn = document.createElement('button');
+                slideBtn.type = 'button';
+                slideBtn.className = 'step-mod-btn step-slide-btn';
+                slideBtn.setAttribute('aria-label', `Slide from step ${patternIndex + 1} into the next`);
+                slideBtn.classList.toggle('active', Boolean(step.slide));
+                slideBtn.setAttribute('aria-pressed', String(Boolean(step.slide)));
+                slideBtn.disabled = !withinPattern;
+                slideCell.appendChild(slideBtn);
+                slideLane.appendChild(slideCell);
+
+                if (withinPattern) {
+                    accentBtn.addEventListener('click', () => {
+                        const next = !step.accent;
+                        step.accent = next;
+                        accentBtn.classList.toggle('active', next);
+                        accentBtn.setAttribute('aria-pressed', String(next));
+                        toggleBtn.classList.toggle('accented', next);
+                        if (!socket) return;
+                        socket.emit('instrument:step', {
+                            instrumentId: instrument.id,
+                            stepIndex: patternIndex,
+                            step: { accent: next },
+                        });
+                    });
+                    slideBtn.addEventListener('click', () => {
+                        const next = !step.slide;
+                        step.slide = next;
+                        slideBtn.classList.toggle('active', next);
+                        slideBtn.setAttribute('aria-pressed', String(next));
+                        refreshSlurs();
+                        if (!socket) return;
+                        socket.emit('instrument:step', {
+                            instrumentId: instrument.id,
+                            stepIndex: patternIndex,
+                            step: { slide: next },
+                        });
+                    });
+                }
+                cells.push(accentCell, noteCell, pitchCell, slideCell);
+                buttons.push(accentBtn, toggleBtn, pitchSelect, slideBtn);
+            } else {
+                cells.push(noteCell, pitchCell);
+                buttons.push(toggleBtn, pitchSelect);
+            }
+
+            stepRefs.push({
+                cell: noteCell,
+                cells,
+                buttons,
+                toggleBtn,
+                pitchSelect,
+                accentBtn,
+                slideBtn,
+                disabled: !withinPattern,
+                baseDisabled: !withinPattern,
+            });
         }
+    });
 
-        container.appendChild(cell);
-
-        const baseDisabled = !withinPattern;
-        stepRefs.push({
-            cell,
-            toggleBtn,
-            pitchSelect,
-            accentBtn,
-            slideBtn,
-            disabled: baseDisabled,
-            baseDisabled,
+    if (slideLanes.length) {
+        const layers = slideLanes.map((lane) => {
+            const layer = document.createElement('div');
+            layer.className = 'slur-layer';
+            layer.setAttribute('aria-hidden', 'true');
+            lane.appendChild(layer);
+            return layer;
         });
+        refreshSlurs = () => drawSlurs(layers, steps, instrumentStepCount);
+        refreshSlurs();
     }
 
-    if (entry) {
-        entry.stepRefs = stepRefs;
+    assignStepRefs(entry, stepRefs);
+}
+
+// Splits each slur over the 16-step lines; a part that continues on another
+// line is left open at that side.
+function drawSlurs(layers, steps, count) {
+    layers.forEach((layer) => {
+        layer.innerHTML = '';
+    });
+    computeSlurs(steps, count).forEach((slur) => {
+        layers.forEach((layer, line) => {
+            const lineStart = line * STEP_GRID_COLUMNS;
+            const from = Math.max(slur.start, lineStart);
+            const to = Math.min(slur.end, lineStart + STEP_GRID_COLUMNS);
+            if (to <= from) {
+                return;
+            }
+            const el = document.createElement('span');
+            el.className = 'slur';
+            el.classList.toggle('inert', slur.inert);
+            el.classList.toggle('open-start', from > slur.start || slur.openStart);
+            el.classList.toggle('open-end', to < slur.end || slur.openEnd);
+            el.style.left = `${((from - lineStart) / STEP_GRID_COLUMNS) * 100}%`;
+            el.style.width = `${((to - from) / STEP_GRID_COLUMNS) * 100}%`;
+            layer.appendChild(el);
+        });
+    });
+}
+
+// Shared by the 808 (one lane per drum voice) and the sampler (one lane per
+// slot). Clicking a lane label picks the voice/slot the inspector edits and
+// that Fill acts on; clicking a cell toggles that voice on that step.
+function renderHitLanes(container, instrument, { voices, activeVoice, onSelectVoice, isOn, onToggle, indicatorClass, toggleClass }) {
+    container.innerHTML = '';
+    const steps = instrument.steps || [];
+    const entry = socketState.instrumentElements.get(instrument.id);
+    const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
+    const visibleSteps = getVisibleStepSlots(instrumentStepCount);
+    const stepRefs = [];
+    for (let i = 0; i < visibleSteps; i += 1) {
+        const withinPattern = i < instrumentStepCount;
+        stepRefs.push({ cell: null, cells: [], buttons: [], disabled: !withinPattern, baseDisabled: !withinPattern });
     }
+
+    createStepLines(container, visibleSteps).forEach((lineEl, line) => {
+        voices.forEach((voice) => {
+            const lane = document.createElement('div');
+            lane.className = 'step-lane lane-hit';
+            const label = document.createElement('button');
+            label.type = 'button';
+            label.className = 'lane-label voice-select';
+            label.dataset.voice = voice.id;
+            label.classList.toggle('active', voice.id === activeVoice);
+            label.setAttribute('aria-pressed', String(voice.id === activeVoice));
+            label.title = voice.title || voice.label;
+            const labelText = document.createElement('span');
+            labelText.textContent = voice.label;
+            label.appendChild(labelText);
+            label.addEventListener('click', () => onSelectVoice(voice.id));
+            lane.appendChild(label);
+
+            for (let column = 0; column < STEP_GRID_COLUMNS; column += 1) {
+                const patternIndex = line * STEP_GRID_COLUMNS + column;
+                const withinPattern = patternIndex < instrumentStepCount;
+                const cell = createStepCell(column, withinPattern);
+                const active = withinPattern && isOn(patternIndex, voice.id);
+                cell.classList.toggle('active', active);
+
+                const toggleBtn = document.createElement('button');
+                toggleBtn.type = 'button';
+                toggleBtn.className = toggleClass;
+                toggleBtn.dataset.stepIndex = String(patternIndex);
+                toggleBtn.setAttribute('aria-label', `${voice.title || voice.label}, step ${patternIndex + 1}`);
+                toggleBtn.setAttribute('aria-pressed', String(active));
+                toggleBtn.disabled = !withinPattern;
+                const indicator = document.createElement('span');
+                indicator.className = indicatorClass;
+                indicator.classList.toggle('active', active);
+                toggleBtn.appendChild(indicator);
+
+                if (withinPattern) {
+                    toggleBtn.addEventListener('click', () => {
+                        const next = onToggle(patternIndex, voice.id);
+                        indicator.classList.toggle('active', next);
+                        cell.classList.toggle('active', next);
+                        toggleBtn.setAttribute('aria-pressed', String(next));
+                    });
+                }
+
+                cell.appendChild(toggleBtn);
+                lane.appendChild(cell);
+                const ref = stepRefs[patternIndex];
+                ref.cells.push(cell);
+                ref.buttons.push(toggleBtn);
+                if (!ref.cell) {
+                    ref.cell = cell;
+                    ref.toggleBtn = toggleBtn;
+                }
+            }
+            lineEl.appendChild(lane);
+        });
+    });
+
+    assignStepRefs(entry, stepRefs);
+}
+
+function refreshVoiceSelection(entry, voiceId) {
+    entry.stepGrid?.querySelectorAll('.voice-select').forEach((label) => {
+        const isActive = label.dataset.voice === voiceId;
+        label.classList.toggle('active', isActive);
+        label.setAttribute('aria-pressed', String(isActive));
+    });
 }
 
 export function renderDrumStepGrid(container, instrument) {
-    container.innerHTML = '';
-    const steps = instrument.steps || [];
-    const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
-    const visibleSteps = getVisibleStepSlots(instrumentStepCount);
-    const activeSteps = instrumentStepCount;
     const entry = socketState.instrumentElements.get(instrument.id);
     if (!entry) {
         return;
     }
-    const activeDrum = entry?.activeDrum || TR808_DRUMS[0].id;
-    const stepRefs = [];
+    const steps = instrument.steps || (instrument.steps = []);
+    const stepAt = (index) => {
+        const existing = steps[index] || createEmptyDrumStep();
+        existing.layers = { ...createEmptyDrumStep().layers, ...(existing.layers || {}) };
+        existing.active = TR808_DRUMS.some((drum) => existing.layers[drum.id]);
+        steps[index] = existing;
+        return existing;
+    };
 
-    for (let i = 0; i < visibleSteps; i += 1) {
-        const patternIndex = i;
-        const withinPattern = patternIndex < activeSteps;
-        const baseStep = createEmptyDrumStep();
-        const originalStep = steps[patternIndex] || createEmptyDrumStep();
-        originalStep.layers = { ...baseStep.layers, ...(originalStep.layers || {}) };
-        if (!steps[patternIndex] && withinPattern) {
-            steps[patternIndex] = originalStep;
-        }
-        const step = originalStep;
-
-        const cell = document.createElement('div');
-        cell.className = 'step-cell drum-cell';
-        const drumMeta = TR808_DRUMS.find((drum) => drum.id === activeDrum) || TR808_DRUMS[0];
-        const isActive = withinPattern && Boolean(step.layers[activeDrum]);
-        step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
-        const activeBackground = hexToRgba(drumMeta.color, 0.25) || 'rgba(56, 189, 248, 0.22)';
-        cell.style.setProperty('--drum-color', drumMeta.color);
-        cell.style.setProperty('--drum-active-bg', activeBackground);
-        cell.classList.toggle('active', isActive);
-        cell.classList.toggle('drum-active', isActive);
-        cell.classList.toggle('step-disabled', !withinPattern);
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'step-toggle drum-step-toggle';
-        toggleBtn.dataset.stepIndex = String(patternIndex);
-        toggleBtn.disabled = !withinPattern;
-
-        const indicator = document.createElement('span');
-        indicator.className = 'drum-indicator';
-        indicator.style.setProperty('--drum-color', drumMeta.color);
-        indicator.classList.toggle('active', isActive);
-
-        const indexLabel = document.createElement('span');
-        indexLabel.className = 'step-index';
-        indexLabel.textContent = formatStepIndex(i, visibleSteps);
-
-        toggleBtn.appendChild(indicator);
-        toggleBtn.appendChild(indexLabel);
-
-        toggleBtn.addEventListener('click', () => {
-            if (!withinPattern) {
+    renderHitLanes(container, instrument, {
+        voices: TR808_DRUMS.map((drum) => ({ id: drum.id, label: drum.label })),
+        activeVoice: entry.activeDrum || TR808_DRUMS[0].id,
+        indicatorClass: 'drum-indicator',
+        toggleClass: 'step-toggle drum-step-toggle',
+        isOn: (index, drumId) => Boolean(stepAt(index).layers[drumId]),
+        onToggle: (index, drumId) => {
+            const step = stepAt(index);
+            const next = !step.layers[drumId];
+            step.layers[drumId] = next;
+            step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
+            if (socket) {
+                socket.emit('instrument:step', {
+                    instrumentId: instrument.id,
+                    stepIndex: index,
+                    drum: drumId,
+                    value: next,
+                });
+            }
+            return next;
+        },
+        onSelectVoice: (drumId) => {
+            if (entry.activeDrum === drumId) {
                 return;
             }
-            const currentDrum = entry.activeDrum || TR808_DRUMS[0].id;
-            const current = Boolean(step.layers[currentDrum]);
-            const next = !current;
-            step.layers[currentDrum] = next;
-
-            const drumInfo = TR808_DRUMS.find((d) => d.id === currentDrum) || drumMeta;
-            const selectedColor = drumInfo.color;
-            indicator.style.setProperty('--drum-color', selectedColor);
-            const selectedBackground = hexToRgba(selectedColor, 0.25) || activeBackground;
-
-            const isActiveNow = Boolean(step.layers[currentDrum]);
-            indicator.classList.toggle('active', isActiveNow && currentDrum === entry.activeDrum);
-            cell.style.setProperty('--drum-color', selectedColor);
-            cell.style.setProperty('--drum-active-bg', selectedBackground);
-            cell.classList.toggle('drum-active', isActiveNow && currentDrum === entry.activeDrum);
-            cell.classList.toggle('active', isActiveNow && currentDrum === entry.activeDrum);
-
-            step.active = TR808_DRUMS.some((drum) => step.layers[drum.id]);
-
-            if (!socket) return;
-            socket.emit('instrument:step', {
-                instrumentId: instrument.id,
-                stepIndex: patternIndex,
-                drum: currentDrum,
-                value: next,
-            });
-        });
-
-        cell.appendChild(toggleBtn);
-        container.appendChild(cell);
-
-        const baseDisabled = !withinPattern;
-        stepRefs.push({
-            cell,
-            toggleBtn,
-            indicator,
-            disabled: baseDisabled,
-            baseDisabled,
-        });
-    }
-
-    if (entry) {
-        entry.stepRefs = stepRefs;
-    }
+            entry.activeDrum = drumId;
+            const latest = state.instruments.get(instrument.id) || instrument;
+            refreshVoiceSelection(entry, drumId);
+            renderParamControls(entry.paramsContainer, latest, INSTRUMENT_LIBRARY[latest.type]);
+            updateFillButtonLabel(entry, latest);
+            updateInstrumentLockState(entry, latest);
+        },
+    });
 }
 
 export function renderSamplerStepGrid(container, instrument) {
-    container.innerHTML = '';
-    const steps = instrument.steps || [];
-    const instrumentStepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(steps) ? steps.length : STEP_COUNT));
-    const visibleSteps = getVisibleStepSlots(instrumentStepCount);
     const entry = socketState.instrumentElements.get(instrument.id);
     if (!entry) {
         return;
     }
-    const activeSlot = entry.activeSamplerSlot && SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)
-        ? entry.activeSamplerSlot
-        : SAMPLER_SLOT_IDS[0];
-    const slotMeta = SAMPLER_SLOT_CONFIG.find((slot) => slot.id === activeSlot) || SAMPLER_SLOT_CONFIG[0];
-    const stepRefs = [];
+    const steps = instrument.steps || (instrument.steps = []);
+    const stepAt = (index) => {
+        const existing = steps[index] ? normalizeSamplerStep(steps[index]) : createEmptySamplerStep();
+        steps[index] = existing;
+        return existing;
+    };
+    const slots = instrument.params?.slots || {};
 
-    for (let i = 0; i < visibleSteps; i += 1) {
-        const patternIndex = i;
-        const withinPattern = patternIndex < instrumentStepCount;
-        const base = createEmptySamplerStep();
-        const existing = steps[patternIndex] ? normalizeSamplerStep(steps[patternIndex]) : base;
-        if (!steps[patternIndex]) {
-            steps[patternIndex] = existing;
-        }
-
-        const isActive = withinPattern && Boolean(existing.slots[activeSlot]);
-        const cell = document.createElement('div');
-        cell.className = 'step-cell sampler-cell';
-        cell.classList.toggle('active', isActive);
-        cell.classList.toggle('step-disabled', !withinPattern);
-        cell.style.setProperty('--sampler-color', slotMeta.color);
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'step-toggle sampler-step-toggle';
-        toggleBtn.dataset.stepIndex = String(patternIndex);
-        toggleBtn.disabled = !withinPattern;
-
-        const indicator = document.createElement('span');
-        indicator.className = 'sampler-indicator';
-        indicator.style.setProperty('--sampler-color', slotMeta.color);
-        indicator.classList.toggle('active', isActive);
-
-        const indexLabel = document.createElement('span');
-        indexLabel.className = 'step-index';
-        indexLabel.textContent = formatStepIndex(i, visibleSteps);
-
-        toggleBtn.appendChild(indicator);
-        toggleBtn.appendChild(indexLabel);
-
-        toggleBtn.addEventListener('click', () => {
-            if (!withinPattern) {
-                return;
+    renderHitLanes(container, instrument, {
+        voices: SAMPLER_SLOT_CONFIG.map((slot) => {
+            const sampleName = slots[slot.id]?.sample?.name;
+            return {
+                id: slot.id,
+                label: sampleName ? `${slot.id} · ${sampleName}` : slot.id,
+                title: sampleName ? `Slot ${slot.id}: ${sampleName}` : `Slot ${slot.id}`,
+            };
+        }),
+        activeVoice: entry.activeSamplerSlot && SAMPLER_SLOT_IDS.includes(entry.activeSamplerSlot)
+            ? entry.activeSamplerSlot
+            : SAMPLER_SLOT_IDS[0],
+        indicatorClass: 'sampler-indicator',
+        toggleClass: 'step-toggle sampler-step-toggle',
+        isOn: (index, slotId) => Boolean(stepAt(index).slots[slotId]),
+        onToggle: (index, slotId) => {
+            const step = stepAt(index);
+            const next = !step.slots[slotId];
+            step.slots[slotId] = next;
+            step.active = Object.values(step.slots).some(Boolean);
+            if (socket) {
+                socket.emit('instrument:step', {
+                    instrumentId: instrument.id,
+                    stepIndex: index,
+                    slot: slotId,
+                    value: next,
+                });
             }
-            const nextValue = !existing.slots[activeSlot];
-            existing.slots[activeSlot] = nextValue;
-            existing.active = Object.values(existing.slots).some(Boolean);
-            indicator.classList.toggle('active', nextValue);
-            cell.classList.toggle('active', nextValue);
-            if (!socket) return;
-            socket.emit('instrument:step', {
-                instrumentId: instrument.id,
-                stepIndex: patternIndex,
-                slot: activeSlot,
-                value: nextValue,
-            });
-        });
+            return next;
+        },
+        onSelectVoice: (slotId) => selectSamplerSlot(entry, instrument.id, slotId),
+    });
+}
 
-        cell.appendChild(toggleBtn);
-        container.appendChild(cell);
-        const baseDisabled = !withinPattern;
-        stepRefs.push({
-            cell,
-            toggleBtn,
-            indicator,
-            disabled: baseDisabled,
-            baseDisabled,
-        });
+function selectSamplerSlot(entry, instrumentId, slotId) {
+    if (entry.activeSamplerSlot === slotId) {
+        return;
     }
-
-    entry.stepRefs = stepRefs;
+    entry.activeSamplerSlot = slotId;
+    const latest = state.instruments.get(instrumentId);
+    if (!latest) {
+        return;
+    }
+    const definition = INSTRUMENT_LIBRARY[latest.type];
+    refreshVoiceSelection(entry, slotId);
+    renderSamplerSelector(entry, latest, definition);
+    renderParamControls(entry.paramsContainer, latest, definition);
+    updateFillButtonLabel(entry, latest);
+    updateInstrumentLockState(entry, latest);
 }

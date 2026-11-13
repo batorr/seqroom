@@ -19,7 +19,8 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 - TB-303, TR-808, Poly Synth, and Sampler instruments (sampler exposes six slots with per-slot gain/pan/pitch/start/end/reverse controls)
 - Step counts per instrument from 1 to 128 (default 16) and per-step drum/sampler layers
 - Tempo range 30–300 BPM with numeric input and slider, plus transport controls shared by every client
-- Sidebar overview, synth modal, and locking state to keep collaborators coordinated
+- A shared score: every instrument is a row of lanes on the same 16-column grid, with the selected instrument's sound settings below it
+- Instrument locking to keep collaborators coordinated
 - Local recording pipeline using `public/recording-processor.js`, downloading 32-bit float WAV files
 
 ## Room Flow

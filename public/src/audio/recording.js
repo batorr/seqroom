@@ -261,7 +261,8 @@ export function updateRecordButton(isRecording) {
         }
 
         recordToggleBtn.classList.toggle('recording', Boolean(isRecording));
-        recordToggleBtn.textContent = Boolean(isRecording) ? '● REC' : 'REC';
+        recordToggleBtn.setAttribute('aria-pressed', String(Boolean(isRecording)));
+        recordToggleBtn.setAttribute('aria-label', isRecording ? 'Stop recording' : 'Record');
         if (typeof recordToggleBtn.disabled === 'boolean') {
             recordToggleBtn.disabled = !isRecordingSupported();
         }
