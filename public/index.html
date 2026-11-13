@@ -31,10 +31,12 @@
         --font: "Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
         --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
-        /* Score columns: instrument | lane label | 16 steps */
+        /* Score columns: instrument | lane label | 16 steps. The score only
+           scrolls sideways when even --step-min wide steps do not fit. */
         --label-col: 200px;
         --lane-col: 84px;
-        --score-min: 960px;
+        --step-min: 38px;
+        --score-min: calc(var(--label-col) + var(--lane-col) + 16 * var(--step-min));
         --gutter: 40px;
       }
 
@@ -653,7 +655,9 @@
 
       .instrument-name-input:focus { outline: none; }
 
-      .synth-body { min-width: 0; }
+      /* Hover arcs and slurs may reach a hair past the last step; never let
+         that make the score scroll. clip (unlike hidden) keeps sticky labels working. */
+      .synth-body { min-width: 0; overflow-x: clip; }
 
       /* Step lanes: a 16-column system per line, wrapped like a score. */
       .step-grid { display: flex; flex-direction: column; }
@@ -788,7 +792,8 @@
         border-radius: 0 0 50% 50% / 0 0 100% 100%;
       }
 
-      .step-lane .step-cell:last-child .step-slide-btn::after {
+      /* 17th child: the lane label plus 16 cells (the slur layer comes after). */
+      .step-lane > .step-cell:nth-child(17) .step-slide-btn::after {
         width: 50%;
         border-right: 0;
         border-radius: 0 0 0 100% / 0 0 0 100%;
@@ -1255,12 +1260,21 @@
       .pitch-popup__label { margin-top: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
       .pitch-popup__hint { margin-top: 8px; font-size: 11px; color: var(--muted); text-align: center; }
 
+      /* ─── Narrower windows ───────────────────────────────────────────── */
+      @media (max-width: 1100px) {
+        :root {
+          --label-col: 156px;
+          --lane-col: 76px;
+          --gutter: 28px;
+        }
+      }
+
       /* ─── Small screens ──────────────────────────────────────────────── */
       @media (max-width: 760px) {
         :root {
           --label-col: 124px;
           --lane-col: 58px;
-          --score-min: 760px;
+          --step-min: 36px;
           --gutter: 16px;
         }
 
