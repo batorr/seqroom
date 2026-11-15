@@ -47,8 +47,9 @@ import {
 } from './main.js';
 
 const PITCH_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-const PITCH_OCTAVE_MIN = 0;
-const PITCH_OCTAVE_MAX = 7;
+// The score only holds NOTE_OPTIONS (C1–B5); anything outside is reset to C3.
+const PITCH_OCTAVE_MIN = 1;
+const PITCH_OCTAVE_MAX = 5;
 let activePitchPopup = null;
 
 const COLLAPSE_STORAGE_PREFIX = 'seqroom:collapsed:';
@@ -347,32 +348,41 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
     const columns = document.createElement('div');
     columns.className = 'pitch-popup__columns';
 
-    const noteColumn = document.createElement('div');
-    noteColumn.className = 'pitch-popup__column pitch-popup__column--note pitch-popup__column--active';
-    const noteValueEl = document.createElement('div');
-    noteValueEl.className = 'pitch-popup__value';
-    noteValueEl.textContent = PITCH_NOTE_NAMES[noteIndex];
-    const noteLabelEl = document.createElement('div');
-    noteLabelEl.className = 'pitch-popup__label';
-    noteLabelEl.textContent = 'NOTE';
-    noteColumn.append(noteValueEl, noteLabelEl);
+    // Each column shows its value with the next value up above it and the
+    // next value down below it; on touch screens those neighbours are visible
+    // and tappable, and a vertical swipe walks through the values.
+    const createPitchColumn = (field, label) => {
+        const column = document.createElement('div');
+        column.className = `pitch-popup__column pitch-popup__column--${field}`;
+        const up = document.createElement('div');
+        up.className = 'pitch-popup__neighbor';
+        up.dataset.step = '1';
+        const value = document.createElement('div');
+        value.className = 'pitch-popup__value';
+        const down = document.createElement('div');
+        down.className = 'pitch-popup__neighbor';
+        down.dataset.step = '-1';
+        const labelEl = document.createElement('div');
+        labelEl.className = 'pitch-popup__label';
+        labelEl.textContent = label;
+        column.append(up, value, down, labelEl);
+        return { column, up, value, down };
+    };
 
-    const octaveColumn = document.createElement('div');
-    octaveColumn.className = 'pitch-popup__column pitch-popup__column--octave';
-    const octaveValueEl = document.createElement('div');
-    octaveValueEl.className = 'pitch-popup__value';
-    octaveValueEl.textContent = String(octave);
-    const octaveLabelEl = document.createElement('div');
-    octaveLabelEl.className = 'pitch-popup__label';
-    octaveLabelEl.textContent = 'OCTAVE';
-    octaveColumn.append(octaveValueEl, octaveLabelEl);
+    const noteParts = createPitchColumn('note', 'NOTE');
+    const octaveParts = createPitchColumn('octave', 'OCTAVE');
+    const noteColumn = noteParts.column;
+    const octaveColumn = octaveParts.column;
 
     columns.append(noteColumn, octaveColumn);
     container.appendChild(columns);
 
+    const isTouch = window.matchMedia?.('(pointer: coarse)').matches;
     const hint = document.createElement('div');
     hint.className = 'pitch-popup__hint';
-    hint.textContent = 'Scroll or arrow keys · click outside to apply';
+    hint.textContent = isTouch
+        ? 'Swipe up or down · tap outside to apply'
+        : 'Scroll, drag or arrow keys · click outside to apply';
     container.appendChild(hint);
 
     document.body.appendChild(container);
@@ -416,9 +426,14 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
     };
 
     const updateDisplay = () => {
-        noteValueEl.textContent = PITCH_NOTE_NAMES[normalizeNoteIndex(noteIndex)];
-        octaveValueEl.textContent = String(clampOctave(octave));
+        noteParts.value.textContent = PITCH_NOTE_NAMES[normalizeNoteIndex(noteIndex)];
+        noteParts.up.textContent = PITCH_NOTE_NAMES[normalizeNoteIndex(noteIndex + 1)];
+        noteParts.down.textContent = PITCH_NOTE_NAMES[normalizeNoteIndex(noteIndex - 1)];
+        octaveParts.value.textContent = String(clampOctave(octave));
+        octaveParts.up.textContent = octave < PITCH_OCTAVE_MAX ? String(octave + 1) : '';
+        octaveParts.down.textContent = octave > PITCH_OCTAVE_MIN ? String(octave - 1) : '';
     };
+    updateDisplay();
 
     const adjustNote = (delta) => {
         noteIndex = normalizeNoteIndex(noteIndex + delta);
@@ -472,6 +487,62 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
             event.preventDefault();
         }
     }, { passive: false });
+
+    // Swipe (or drag with a mouse) up to raise, down to lower: one step per
+    // stretch of travel, so a long swipe runs through several values. A tap
+    // on a neighbour value moves one step towards it.
+    const SWIPE_STEP_PX = { note: 22, octave: 36 };
+    const TAP_SLOP_PX = 6;
+    const attachSwipe = (column, field, adjust) => {
+        let drag = null;
+        column.addEventListener('pointerdown', (event) => {
+            if (event.pointerType === 'mouse' && event.button !== 0) {
+                return;
+            }
+            event.preventDefault();
+            setActiveField(field);
+            try {
+                column.setPointerCapture(event.pointerId);
+            } catch {
+                // Pointer already gone; the drag still works while over the column.
+            }
+            const neighbor = event.target.closest?.('[data-step]');
+            drag = {
+                id: event.pointerId,
+                startY: event.clientY,
+                anchorY: event.clientY,
+                moved: false,
+                tapStep: neighbor && neighbor.textContent ? Number(neighbor.dataset.step) : 0,
+            };
+        });
+        column.addEventListener('pointermove', (event) => {
+            if (!drag || event.pointerId !== drag.id) {
+                return;
+            }
+            if (Math.abs(event.clientY - drag.startY) > TAP_SLOP_PX) {
+                drag.moved = true;
+            }
+            const stepPx = SWIPE_STEP_PX[field];
+            const steps = Math.trunc((drag.anchorY - event.clientY) / stepPx);
+            if (steps !== 0) {
+                adjust(steps);
+                drag.anchorY -= steps * stepPx;
+            }
+        });
+        const endDrag = (event) => {
+            if (!drag || event.pointerId !== drag.id) {
+                return;
+            }
+            if (event.type === 'pointerup' && !drag.moved && drag.tapStep) {
+                adjust(drag.tapStep);
+            }
+            drag = null;
+        };
+        column.addEventListener('pointerup', endDrag);
+        column.addEventListener('pointercancel', endDrag);
+    };
+    attachSwipe(noteColumn, 'note', adjustNote);
+    attachSwipe(octaveColumn, 'octave', adjustOctave);
 
     const handleKeyDown = (event) => {
         if (!activePitchPopup) {

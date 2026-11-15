@@ -1253,9 +1253,27 @@
         border-bottom: 3px solid transparent;
         text-align: center;
         cursor: ns-resize;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
       }
 
       .pitch-popup__column--active { border-bottom-color: var(--accent); }
+      .pitch-popup__neighbor { display: none; }
+
+      /* Touch screens: show the values above and below, with room to swipe. */
+      @media (pointer: coarse) {
+        .pitch-popup__column { min-width: 88px; padding: 0 12px 8px; }
+        .pitch-popup__neighbor {
+          display: block;
+          height: 32px;
+          font-size: 18px;
+          font-weight: 600;
+          line-height: 32px;
+          color: var(--muted);
+        }
+      }
       .pitch-popup__value { font-size: 40px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
       .pitch-popup__label { margin-top: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
       .pitch-popup__hint { margin-top: 8px; font-size: 11px; color: var(--muted); text-align: center; }
