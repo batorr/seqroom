@@ -21,6 +21,7 @@ import { computeSlurs } from '../shared/slurs.js';
 import { randomAcidLine } from '../shared/acid-line.js';
 import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../shared/rumble.js';
 import { randomStabLine, STAB_DEFAULT_PITCH } from '../shared/rave-stab.js';
+import { randomHooverLine, HOOVER_DEFAULT_PITCH } from '../shared/hoover.js';
 import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
@@ -717,11 +718,12 @@ const FILL_CLEAR_PITCH = {
     [SynthTypes.POLY]: 'C4',
     [SynthTypes.RUMBLE]: RUMBLE_DEFAULT_PITCH,
     [SynthTypes.STAB]: STAB_DEFAULT_PITCH,
+    [SynthTypes.HOOVER]: HOOVER_DEFAULT_PITCH,
 };
 
 // What Random follows in the room: the first Rave Kit's kick lane (so every
 // rumble hit ducks with a kick) and the acid basslines' most common note
-// (the key for the rumble and the stabs).
+// (the key for the rumble, the stabs and the hoover).
 function roomRollContext() {
     const instruments = state.instrumentOrder.map((id) => state.instruments.get(id)).filter(Boolean);
     const kit = instruments.find((instrument) => instrument.type === SynthTypes.DRUMS);
@@ -1238,6 +1240,12 @@ export function ensureInstrumentCard(instrument) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             });
             randomBtn.title = `Last roll: ${line.root}, ${line.rhythm}`;
+        } else if (instr.type === SynthTypes.HOOVER) {
+            const line = randomHooverLine(count, { rootClass: roomRollContext().rootClass });
+            line.steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
+            randomBtn.title = `Last roll: ${line.root}, ${line.rhythm}`;
         } else {
             const steps = Array.from({ length: count }, () => ({
                 active: Math.random() < 0.5,
@@ -1535,7 +1543,7 @@ export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble', 'tone-stab');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble', 'tone-stab', 'tone-hoover');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
@@ -1653,6 +1661,9 @@ export function removeInstrumentCard(instrumentId) {
     }).catch(console.error);
     import('../audio/instruments/rumble.js').then(({ releaseRumble }) => {
         releaseRumble(instrumentId);
+    }).catch(console.error);
+    import('../audio/instruments/hoover.js').then(({ releaseHoover }) => {
+        releaseHoover(instrumentId);
     }).catch(console.error);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());

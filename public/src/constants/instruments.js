@@ -4,6 +4,7 @@ import { sliderParam, selectParam } from '../utils/helpers.js';
 import { DRUM_PARAMS, DRUM_KIT_PARAM_KEYS, DRUM_VOICE_PARAM_KEYS } from '../shared/drum-kit.js';
 import { RUMBLE_PARAMS, RUMBLE_PARAM_KEYS } from '../shared/rumble.js';
 import { STAB_PARAMS, STAB_PARAM_KEYS, STAB_CHORDS } from '../shared/rave-stab.js';
+import { HOOVER_PARAMS, HOOVER_PARAM_KEYS } from '../shared/hoover.js';
 
 // Instrument types enum
 export const SynthTypes = Object.freeze({
@@ -13,6 +14,7 @@ export const SynthTypes = Object.freeze({
     SAMPLER: 'sampler',
     RUMBLE: 'rumble',
     STAB: 'rave-stab',
+    HOOVER: 'hoover',
 });
 
 // Rave Kit voices (shared with the server).
@@ -49,6 +51,9 @@ const STAB_PARAM_DEFS = [
     ...STAB_PARAM_KEYS.map((key) => sliderParam(key, STAB_PARAMS[key].label, STAB_PARAMS[key].min, STAB_PARAMS[key].max, 0.01)),
     selectParam('chord', 'Chord', STAB_CHORDS.map(({ value, label }) => ({ value, label }))),
 ];
+
+// Hoover sliders, from the schema shared with the server.
+const HOOVER_PARAM_DEFS = HOOVER_PARAM_KEYS.map((key) => sliderParam(key, HOOVER_PARAMS[key].label, HOOVER_PARAMS[key].min, HOOVER_PARAMS[key].max, 0.01));
 
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
@@ -119,6 +124,12 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             typeLabel: 'Stab',
             toneClass: 'tone-stab',
             params: STAB_PARAM_DEFS,
+        },
+        [SynthTypes.HOOVER]: {
+            label: 'Hoover',
+            typeLabel: 'Hoover',
+            toneClass: 'tone-hoover',
+            params: HOOVER_PARAM_DEFS,
         },
     };
 }

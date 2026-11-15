@@ -33,6 +33,7 @@ const SynthTypes = Object.freeze({
   SAMPLER: 'sampler',
   RUMBLE: 'rumble',
   STAB: 'rave-stab',
+  HOOVER: 'hoover',
 });
 
 const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -70,6 +71,8 @@ function defaultInstrumentName(type) {
       return 'Rumble';
     case SynthTypes.STAB:
       return 'Rave Stab';
+    case SynthTypes.HOOVER:
+      return 'Hoover';
     default:
       return 'Instrument';
   }
@@ -127,6 +130,8 @@ function createDefaultParams(type) {
       return rumbleKit.normalizeRumbleParams({});
     case SynthTypes.STAB:
       return stabKit.normalizeStabParams({});
+    case SynthTypes.HOOVER:
+      return hooverKit.normalizeHooverParams({});
     case SynthTypes.SAMPLER:
       return {
         slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
@@ -178,6 +183,7 @@ function createStepTemplate(type) {
     [SynthTypes.SIMPLE]: 'C4',
     [SynthTypes.RUMBLE]: rumbleKit.RUMBLE_DEFAULT_PITCH,
     [SynthTypes.STAB]: stabKit.STAB_DEFAULT_PITCH,
+    [SynthTypes.HOOVER]: hooverKit.HOOVER_DEFAULT_PITCH,
   };
 
   if (type === SynthTypes.SAMPLER) {
@@ -315,6 +321,9 @@ function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.STAB) {
     instrument.params = stabKit.normalizeStabParams(instrument.params);
   }
+  if (instrument.type === SynthTypes.HOOVER) {
+    instrument.params = hooverKit.normalizeHooverParams(instrument.params);
+  }
   if (instrument.type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
   }
@@ -384,6 +393,8 @@ function cloneInstrument(instrument) {
     base.params = rumbleKit.normalizeRumbleParams(instrument.params);
   } else if (instrument.type === SynthTypes.STAB) {
     base.params = stabKit.normalizeStabParams(instrument.params);
+  } else if (instrument.type === SynthTypes.HOOVER) {
+    base.params = hooverKit.normalizeHooverParams(instrument.params);
   } else if (instrument.type === SynthTypes.SAMPLER) {
     base.params = deepCloneSamplerParams(instrument.params);
   } else {
@@ -540,6 +551,12 @@ function applyInstrumentParams(instrument, params = {}) {
   if (instrument.type === SynthTypes.STAB) {
     instrument.params = stabKit.normalizeStabParams(instrument.params);
     stabKit.applyStabParamUpdates(instrument.params, params);
+    return;
+  }
+
+  if (instrument.type === SynthTypes.HOOVER) {
+    instrument.params = hooverKit.normalizeHooverParams(instrument.params);
+    hooverKit.applyHooverParamUpdates(instrument.params, params);
     return;
   }
 
@@ -925,6 +942,7 @@ let timeline = null;
 let drumKit = null;
 let rumbleKit = null;
 let stabKit = null;
+let hooverKit = null;
 
 const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
 
@@ -1860,16 +1878,17 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline and the drum kit, rumble and rave stab schemas are
-// ES modules shared with the browser, so they are loaded before the server
-// accepts connections.
+// The transport timeline and the drum kit, rumble, rave stab and hoover
+// schemas are ES modules shared with the browser, so they are loaded before
+// the server accepts connections.
 const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
-Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js')])
-  .then(([timelineModule, drumKitModule, rumbleModule, stabModule]) => {
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js')])
+  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule]) => {
     timeline = timelineModule;
     drumKit = drumKitModule;
     rumbleKit = rumbleModule;
     stabKit = stabModule;
+    hooverKit = hooverModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);
       logLocalAddresses();
