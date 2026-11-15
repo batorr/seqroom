@@ -7,7 +7,6 @@ import { state } from './state/main.js';
 // Import UI modules
 import {
     setupSynthModal,
-    primeAudioUnlock,
     createRoomBtn,
     joinRoomBtn,
     leaveRoomBtn,
@@ -25,6 +24,7 @@ import { setupTempoControls, updateTempoDisplay } from './ui/tempo-controls.js';
 // Import socket module
 import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls, attemptAutoJoinFromInvite } from './socket/main.js';
 import { setupDisplayNameControls } from './ui/display-name.js';
+import { installAudioUnlock } from './audio/main.js';
 import { initLFOPanel, setupLFOSocketEvents } from './ui/lfo-card.js';
 
 // Initialize application
@@ -38,7 +38,7 @@ export function initialize() {
     setupInviteModal();
     setupAboutModal();
     setupDisplayNameControls();
-    primeAudioUnlock();
+    installAudioUnlock();
     initLFOPanel();
     setupLFOSocketEvents(socket);
 

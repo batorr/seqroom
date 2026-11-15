@@ -3,6 +3,7 @@
 
 import { state, getDisplayNameOrDefault } from '../state/main.js';
 import { socketState } from '../state/audio.js';
+import { isAudioBlocked } from '../audio/main.js';
 
 // DOM Element References
 export const landingEl = document.getElementById('landing');
@@ -98,6 +99,7 @@ export function renderTransport() {
     transportToggleBtn.setAttribute('aria-label', state.transport.playing ? 'Stop' : 'Play');
     transportToggleBtn.disabled = !state.isInRoom;
     updateRoomDisplay();
+    updateSyncStatus();
     if (inviteRoomBtn) {
         inviteRoomBtn.disabled = !state.isInRoom;
     }
@@ -186,6 +188,13 @@ export function updateSyncStatus() {
     if (!state.isInRoom) {
         syncStatusEl.textContent = '—';
         syncStatusEl.removeAttribute('title');
+        return;
+    }
+
+    // Someone else may have started playback: say why nothing is heard yet.
+    if (state.transport.playing && isAudioBlocked()) {
+        syncStatusEl.textContent = 'Tap for sound';
+        syncStatusEl.title = 'The browser holds audio until you tap or click the page';
         return;
     }
 
@@ -362,15 +371,3 @@ function indicateCopied() {
     }, 1500);
 }
 
-export function primeAudioUnlock() {
-    ['pointerdown', 'keydown'].forEach((eventName) => {
-        document.addEventListener(eventName, () => {
-            import('../audio/main.js').then(({ ensureAudioContext }) => {
-                ensureAudioContext();
-            }).catch(console.error);
-        }, {
-            once: true,
-            passive: true,
-        });
-    });
-}
