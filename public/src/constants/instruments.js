@@ -2,6 +2,7 @@
 
 import { sliderParam, selectParam } from '../utils/helpers.js';
 import { DRUM_PARAMS, DRUM_KIT_PARAM_KEYS, DRUM_VOICE_PARAM_KEYS } from '../shared/drum-kit.js';
+import { RUMBLE_PARAMS, RUMBLE_PARAM_KEYS } from '../shared/rumble.js';
 
 // Instrument types enum
 export const SynthTypes = Object.freeze({
@@ -9,6 +10,7 @@ export const SynthTypes = Object.freeze({
     DRUMS: 'drum-kit',
     POLY: 'poly-synth',
     SAMPLER: 'sampler',
+    RUMBLE: 'rumble',
 });
 
 // Rave Kit voices (shared with the server).
@@ -36,6 +38,9 @@ export const DRUM_KIT_PARAM_DEFS = DRUM_KIT_PARAM_KEYS.map(drumSlider);
 export const DRUM_VOICE_PARAM_DEFS = Object.fromEntries(
     Object.entries(DRUM_VOICE_PARAM_KEYS).map(([voice, keys]) => [voice, keys.map(drumSlider)]),
 );
+
+// Rumble sliders, from the schema shared with the server.
+const RUMBLE_PARAM_DEFS = RUMBLE_PARAM_KEYS.map((key) => sliderParam(key, RUMBLE_PARAMS[key].label, RUMBLE_PARAMS[key].min, RUMBLE_PARAMS[key].max, 0.01));
 
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
@@ -94,6 +99,12 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             typeLabel: 'Sampler',
             toneClass: 'tone-sampler',
             params: [],
+        },
+        [SynthTypes.RUMBLE]: {
+            label: 'Rumble',
+            typeLabel: 'Rumble',
+            toneClass: 'tone-rumble',
+            params: RUMBLE_PARAM_DEFS,
         },
     };
 }

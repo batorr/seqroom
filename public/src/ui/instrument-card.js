@@ -19,6 +19,7 @@ import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
 import { computeSlurs } from '../shared/slurs.js';
 import { randomAcidLine } from '../shared/acid-line.js';
+import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../shared/rumble.js';
 import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
@@ -709,6 +710,18 @@ function randomDrumHits(stepIndex) {
     };
 }
 
+// What a rumble roll follows in the room: the first Rave Kit's kick lane
+// (so every hit ducks with a kick) and the acid basslines' most common note.
+function rumbleRollContext() {
+    const instruments = state.instrumentOrder.map((id) => state.instruments.get(id)).filter(Boolean);
+    const kit = instruments.find((instrument) => instrument.type === SynthTypes.DRUMS);
+    const kicks = kit
+        ? (kit.steps || []).slice(0, clampStepCount(kit.stepCount ?? STEP_COUNT)).map((step) => Boolean(step?.layers?.kick))
+        : null;
+    const rootClass = dominantPitchClass(instruments.filter((instrument) => instrument.type === SynthTypes.TB303));
+    return { kicks, rootClass };
+}
+
 // Render functions
 export function renderInstrument(instrumentId) {
     if (activePitchPopup) {
@@ -1157,7 +1170,11 @@ export function ensureInstrumentCard(instrument) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, slot, value: !clearing });
             }
         } else {
-            const defaultPitch = instr.type === SynthTypes.TB303 ? 'C2' : instr.type === SynthTypes.POLY ? 'C4' : 'C3';
+            const defaultPitch = instr.type === SynthTypes.TB303
+                ? 'C2'
+                : instr.type === SynthTypes.POLY
+                    ? 'C4'
+                    : instr.type === SynthTypes.RUMBLE ? RUMBLE_DEFAULT_PITCH : 'C3';
             for (let i = 0; i < count; i++) {
                 const step = clearing ? { active: false, pitch: defaultPitch } : { active: true };
                 if (clearing && instr.type === SynthTypes.TB303) {
@@ -1203,6 +1220,12 @@ export function ensureInstrumentCard(instrument) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             });
             randomBtn.title = `Last roll: ${line.root} ${line.scale}`;
+        } else if (instr.type === SynthTypes.RUMBLE) {
+            const line = randomRumbleLine(count, rumbleRollContext());
+            line.steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
+            randomBtn.title = `Last roll: ${line.pitch}`;
         } else {
             const steps = Array.from({ length: count }, () => ({
                 active: Math.random() < 0.5,
@@ -1500,7 +1523,7 @@ export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
@@ -1615,6 +1638,9 @@ export function removeInstrumentCard(instrumentId) {
     }).catch(console.error);
     import('../audio/instruments/drums.js').then(({ releaseDrumKit }) => {
         releaseDrumKit(instrumentId);
+    }).catch(console.error);
+    import('../audio/instruments/rumble.js').then(({ releaseRumble }) => {
+        releaseRumble(instrumentId);
     }).catch(console.error);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());

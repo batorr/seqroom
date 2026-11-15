@@ -31,6 +31,7 @@ const SynthTypes = Object.freeze({
   DRUMS: 'drum-kit',
   SIMPLE: 'poly-synth',
   SAMPLER: 'sampler',
+  RUMBLE: 'rumble',
 });
 
 const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -64,6 +65,8 @@ function defaultInstrumentName(type) {
       return 'Poly Synth';
     case SynthTypes.SAMPLER:
       return 'Sampler';
+    case SynthTypes.RUMBLE:
+      return 'Rumble';
     default:
       return 'Instrument';
   }
@@ -117,6 +120,8 @@ function createDefaultParams(type) {
       };
     case SynthTypes.DRUMS:
       return drumKit.normalizeDrumParams({});
+    case SynthTypes.RUMBLE:
+      return rumbleKit.normalizeRumbleParams({});
     case SynthTypes.SAMPLER:
       return {
         slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
@@ -166,6 +171,7 @@ function createStepTemplate(type) {
   const defaultPitchByType = {
     [SynthTypes.TB303]: 'C2',
     [SynthTypes.SIMPLE]: 'C4',
+    [SynthTypes.RUMBLE]: rumbleKit.RUMBLE_DEFAULT_PITCH,
   };
 
   if (type === SynthTypes.SAMPLER) {
@@ -297,6 +303,9 @@ function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.DRUMS) {
     instrument.params = drumKit.normalizeDrumParams(instrument.params);
   }
+  if (instrument.type === SynthTypes.RUMBLE) {
+    instrument.params = rumbleKit.normalizeRumbleParams(instrument.params);
+  }
   if (instrument.type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
   }
@@ -362,6 +371,8 @@ function cloneInstrument(instrument) {
 
   if (instrument.type === SynthTypes.DRUMS) {
     base.params = drumKit.normalizeDrumParams(instrument.params);
+  } else if (instrument.type === SynthTypes.RUMBLE) {
+    base.params = rumbleKit.normalizeRumbleParams(instrument.params);
   } else if (instrument.type === SynthTypes.SAMPLER) {
     base.params = deepCloneSamplerParams(instrument.params);
   } else {
@@ -506,6 +517,12 @@ function applyInstrumentParams(instrument, params = {}) {
   if (instrument.type === SynthTypes.DRUMS) {
     instrument.params = drumKit.normalizeDrumParams(instrument.params);
     drumKit.applyDrumParamUpdates(instrument.params, params);
+    return;
+  }
+
+  if (instrument.type === SynthTypes.RUMBLE) {
+    instrument.params = rumbleKit.normalizeRumbleParams(instrument.params);
+    rumbleKit.applyRumbleParamUpdates(instrument.params, params);
     return;
   }
 
@@ -889,6 +906,7 @@ let lastPingId = 0;
 // Set from public/src/shared/timeline.js before the server starts listening.
 let timeline = null;
 let drumKit = null;
+let rumbleKit = null;
 
 const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
 
@@ -1824,13 +1842,15 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline and the drum kit schema are ES modules shared with
-// the browser, so they are loaded before the server accepts connections.
+// The transport timeline and the drum kit and rumble schemas are ES modules
+// shared with the browser, so they are loaded before the server accepts
+// connections.
 const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
-Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js')])
-  .then(([timelineModule, drumKitModule]) => {
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js')])
+  .then(([timelineModule, drumKitModule, rumbleModule]) => {
     timeline = timelineModule;
     drumKit = drumKitModule;
+    rumbleKit = rumbleModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);
       logLocalAddresses();

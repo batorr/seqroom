@@ -26,6 +26,7 @@ import { scheduleDrums } from './instruments/drums.js';
 import { getAudioGraph } from './graph.js';
 import { scheduleSampler } from './instruments/sampler.js';
 import { schedulePolySynth } from './instruments/poly-synth.js';
+import { scheduleRumble } from './instruments/rumble.js';
 
 // A step that is due less than this far in the past is still played (a few
 // ms late beats silence); anything later is dropped.
@@ -220,6 +221,9 @@ export function scheduleInstrumentStep(instrument, step, prevStep, when, stepDur
             break;
         case SynthTypes.SAMPLER:
             scheduleSampler(instrument, step, when, ctx);
+            break;
+        case SynthTypes.RUMBLE:
+            scheduleRumble(instrument, step, when, ctx, stepDuration);
             break;
         case SynthTypes.POLY:
         default:
