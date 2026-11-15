@@ -19,7 +19,7 @@ export const DRUM_VOICE_IDS = DRUM_VOICES.map((voice) => voice.id);
 const param = (label, defaultValue) => ({ label, min: 0, max: 1, default: defaultValue });
 
 export const DRUM_PARAMS = {
-    // Defaults are voiced for acid techno: a short, overdriven kick, crisp
+    // Defaults are voiced for acid techno: a short, nearly clean kick, crisp
     // bright hats, a hard clap, and the whole kit pushed into the drive.
 
     // Whole kit
@@ -31,7 +31,7 @@ export const DRUM_PARAMS = {
     kickTune: param('Tune', 0.5),
     kickDecay: param('Decay', 0.35),
     kickAttack: param('Click', 0.6),
-    kickDrive: param('Drive', 0.55),
+    kickDrive: param('Drive', 0.05),
 
     snareLevel: param('Level', 0.6),
     snareTune: param('Tune', 0.55),
