@@ -1204,11 +1204,17 @@ export function ensureInstrumentCard(instrument) {
             });
             randomBtn.title = `Last roll: ${line.root} ${line.scale}`;
         } else {
-            for (let i = 0; i < count; i++) {
-                const active = Math.random() < 0.5;
-                const pitch = randomNotes[Math.floor(Math.random() * randomNotes.length)];
-                socket.emit('instrument:step', { instrumentId, stepIndex: i, step: { active, pitch } });
+            const steps = Array.from({ length: count }, () => ({
+                active: Math.random() < 0.5,
+                pitch: randomNotes[Math.floor(Math.random() * randomNotes.length)],
+            }));
+            // Never leave a short pattern without a single note.
+            if (count > 0 && !steps.some((step) => step.active)) {
+                steps[0].active = true;
             }
+            steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
         }
     });
 

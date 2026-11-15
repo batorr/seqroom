@@ -59,15 +59,23 @@ export function randomAcidLine(count, rng = Math.random) {
 
     const steps = [];
     for (let i = 0; i < count; i += 1) {
-        const active = rng() < ACTIVE_CHANCE;
-        const pitch = noteName(rootSemitones + pickWeighted(pool, rng).interval);
         steps.push({
-            active,
-            pitch,
-            accent: active && rng() < ACCENT_CHANCE,
-            slide: active && rng() < SLIDE_CHANCE,
+            active: rng() < ACTIVE_CHANCE,
+            pitch: noteName(rootSemitones + pickWeighted(pool, rng).interval),
+            accent: false,
+            slide: false,
         });
     }
+    // A short pattern easily rolls nothing but rests (a 4-step one does so
+    // one time in 16): then the first step plays the root.
+    if (count > 0 && !steps.some((step) => step.active)) {
+        steps[0].active = true;
+        steps[0].pitch = noteName(rootSemitones);
+    }
+    steps.forEach((step) => {
+        step.accent = step.active && rng() < ACCENT_CHANCE;
+        step.slide = step.active && rng() < SLIDE_CHANCE;
+    });
 
     return { root: NOTE_NAMES[rootClass], scale: scale.name, steps };
 }

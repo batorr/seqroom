@@ -24,6 +24,23 @@ test('slides and accents are only rolled on notes that play', () => {
     }
 });
 
+test('a short pattern always gets a note; an all-rest roll plays the root on step 1', () => {
+    for (const count of [1, 2, 3, 4]) {
+        for (let seed = 1; seed <= 500; seed += 1) {
+            const { steps } = randomAcidLine(count, seeded(seed));
+            assert.equal(steps.length, count);
+            assert.ok(steps.some((step) => step.active), `count ${count}, seed ${seed}: no note`);
+        }
+    }
+    // Force the fallback: a generator that rolls every step as a rest.
+    let call = 0;
+    const restsOnly = () => (call++ < 2 ? 0 : 0.99);
+    const { root, steps } = randomAcidLine(4, restsOnly);
+    assert.deepEqual(steps.map((step) => step.active), [true, false, false, false]);
+    assert.equal(pitchClass(steps[0].pitch), NOTE_NAMES.indexOf(root));
+    assert.equal(steps[0].pitch.slice(-1), '2');
+});
+
 test('a slide may lead into a rest', () => {
     const intoRest = Array.from({ length: 100 }, (_, seed) => randomAcidLine(16, seeded(seed + 1)).steps)
         .some((steps) => steps.some((step, i) => step.slide && !steps[(i + 1) % steps.length].active));
