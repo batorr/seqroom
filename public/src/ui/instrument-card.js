@@ -18,6 +18,7 @@ export function setInstrumentMuted(instrumentId, muted) {
 import { NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
 import { computeSlurs } from '../shared/slurs.js';
+import { randomAcidLine } from '../shared/acid-line.js';
 import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
@@ -1125,16 +1126,17 @@ export function ensureInstrumentCard(instrument) {
                     socket.emit('instrument:step', { instrumentId, stepIndex: i, slot, value: Math.random() < 0.3 });
                 });
             }
+        } else if (instr.type === SynthTypes.TB303) {
+            const line = randomAcidLine(count);
+            line.steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
+            randomBtn.title = `Last roll: ${line.root} ${line.scale}`;
         } else {
             for (let i = 0; i < count; i++) {
                 const active = Math.random() < 0.5;
                 const pitch = randomNotes[Math.floor(Math.random() * randomNotes.length)];
-                const step = { active, pitch };
-                if (instr.type === SynthTypes.TB303) {
-                    step.accent = active && Math.random() < 0.25;
-                    step.slide = active && Math.random() < 0.15;
-                }
-                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step: { active, pitch } });
             }
         }
     });
