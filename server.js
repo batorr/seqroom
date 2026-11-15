@@ -34,6 +34,7 @@ const SynthTypes = Object.freeze({
   RUMBLE: 'rumble',
   STAB: 'rave-stab',
   HOOVER: 'hoover',
+  FX: 'fx',
 });
 
 const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -73,6 +74,8 @@ function defaultInstrumentName(type) {
       return 'Rave Stab';
     case SynthTypes.HOOVER:
       return 'Hoover';
+    case SynthTypes.FX:
+      return 'FX';
     default:
       return 'Instrument';
   }
@@ -132,6 +135,8 @@ function createDefaultParams(type) {
       return stabKit.normalizeStabParams({});
     case SynthTypes.HOOVER:
       return hooverKit.normalizeHooverParams({});
+    case SynthTypes.FX:
+      return fxKit.normalizeFxParams({});
     case SynthTypes.SAMPLER:
       return {
         slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
@@ -175,6 +180,13 @@ function createStepTemplate(type) {
     return {
       active: false,
       layers: drumKit.createDrumLayers(),
+    };
+  }
+
+  if (type === SynthTypes.FX) {
+    return {
+      active: false,
+      layers: fxKit.createFxLayers(),
     };
   }
 
@@ -324,6 +336,9 @@ function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.HOOVER) {
     instrument.params = hooverKit.normalizeHooverParams(instrument.params);
   }
+  if (instrument.type === SynthTypes.FX) {
+    instrument.params = fxKit.normalizeFxParams(instrument.params);
+  }
   if (instrument.type === SynthTypes.SAMPLER) {
     ensureSamplerParamStructure(instrument);
   }
@@ -374,6 +389,11 @@ function cloneInstrument(instrument) {
         clonedStep.active = Object.values(clonedStep.layers).some(Boolean);
       }
 
+      if (instrument.type === SynthTypes.FX) {
+        ensureFxLayers(clonedStep);
+        clonedStep.active = Object.values(clonedStep.layers).some(Boolean);
+      }
+
       if (instrument.type === SynthTypes.SAMPLER) {
         const normalizedSlots = {};
         for (const slotId of SAMPLER_SLOT_IDS) {
@@ -395,6 +415,8 @@ function cloneInstrument(instrument) {
     base.params = stabKit.normalizeStabParams(instrument.params);
   } else if (instrument.type === SynthTypes.HOOVER) {
     base.params = hooverKit.normalizeHooverParams(instrument.params);
+  } else if (instrument.type === SynthTypes.FX) {
+    base.params = fxKit.normalizeFxParams(instrument.params);
   } else if (instrument.type === SynthTypes.SAMPLER) {
     base.params = deepCloneSamplerParams(instrument.params);
   } else {
@@ -560,6 +582,12 @@ function applyInstrumentParams(instrument, params = {}) {
     return;
   }
 
+  if (instrument.type === SynthTypes.FX) {
+    instrument.params = fxKit.normalizeFxParams(instrument.params);
+    fxKit.applyFxParamUpdates(instrument.params, params);
+    return;
+  }
+
   if (instrument.type === SynthTypes.SAMPLER) {
     const changed = applySamplerParamUpdates(instrument, params);
     if (changed) {
@@ -588,6 +616,17 @@ function applyInstrumentParams(instrument, params = {}) {
       instrument.params[key] = value;
     }
   }
+}
+
+// Exactly one boolean per FX lane.
+function ensureFxLayers(step) {
+  const current = step.layers && typeof step.layers === 'object' ? step.layers : {};
+  const layers = fxKit.createFxLayers();
+  for (const id of fxKit.FX_VOICE_IDS) {
+    layers[id] = current[id] === true;
+  }
+  step.layers = layers;
+  return layers;
 }
 
 // Exactly one boolean per Rave Kit voice.
@@ -943,6 +982,7 @@ let drumKit = null;
 let rumbleKit = null;
 let stabKit = null;
 let hooverKit = null;
+let fxKit = null;
 
 const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
 
@@ -1415,6 +1455,22 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // FX lanes work like drum voices; nothing else edits an FX step.
+    if (instrument.type === SynthTypes.FX) {
+      if (typeof drum !== 'string') {
+        return;
+      }
+      const layers = ensureFxLayers(targetStep);
+      const lane = drum.toLowerCase();
+      if (!(lane in layers)) {
+        return;
+      }
+      layers[lane] = typeof value === 'boolean' ? value : !layers[lane];
+      targetStep.active = Object.values(layers).some(Boolean);
+      broadcastInstrumentState(room.id, instrumentId);
+      return;
+    }
+
     if (instrument.type === SynthTypes.SAMPLER) {
       const slotId = normalizeSamplerSlotId(slot || drum);
       if (!slotId) {
@@ -1878,17 +1934,18 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline and the drum kit, rumble, rave stab and hoover
+// The transport timeline and the drum kit, rumble, rave stab, hoover and FX
 // schemas are ES modules shared with the browser, so they are loaded before
 // the server accepts connections.
 const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
-Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js')])
-  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule]) => {
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js'), loadShared('fx.js')])
+  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule, fxModule]) => {
     timeline = timelineModule;
     drumKit = drumKitModule;
     rumbleKit = rumbleModule;
     stabKit = stabModule;
     hooverKit = hooverModule;
+    fxKit = fxModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);
       logLocalAddresses();

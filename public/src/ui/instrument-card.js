@@ -22,7 +22,8 @@ import { randomAcidLine } from '../shared/acid-line.js';
 import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../shared/rumble.js';
 import { randomStabLine, STAB_DEFAULT_PITCH } from '../shared/rave-stab.js';
 import { randomHooverLine, HOOVER_DEFAULT_PITCH } from '../shared/hoover.js';
-import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
+import { randomFxLine, FX_DEFAULT_LANE } from '../shared/fx.js';
+import { SynthTypes, DRUM_VOICES, FX_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
@@ -33,6 +34,7 @@ import {
     createPitchSelect,
     createEmptyMelodicStep,
     createEmptyDrumStep,
+    createEmptyFxStep,
     createEmptySamplerStep,
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
@@ -211,11 +213,22 @@ export function getVisibleStepSlots(stepCount) {
     return rows * STEP_GRID_COLUMNS;
 }
 
+// Instruments whose steps hold one boolean per lane: the Rave Kit's voices
+// and the FX lanes. The lane picked in the score is entry.activeDrum.
+const LANE_VOICES = { [SynthTypes.DRUMS]: DRUM_VOICES, [SynthTypes.FX]: FX_VOICES };
+const LANE_EMPTY_STEP = { [SynthTypes.DRUMS]: createEmptyDrumStep, [SynthTypes.FX]: createEmptyFxStep };
+const LANE_DEFAULT = { [SynthTypes.DRUMS]: DRUM_VOICES[0].id, [SynthTypes.FX]: FX_DEFAULT_LANE };
+
+function laneFor(type, activeDrum) {
+    const voices = LANE_VOICES[type] || [];
+    return voices.some((voice) => voice.id === activeDrum) ? activeDrum : LANE_DEFAULT[type];
+}
+
 function _areAllStepsFilled(instrument, stepCount, activeDrum, activeSamplerSlot) {
     const steps = instrument.steps;
     if (!Array.isArray(steps)) return false;
-    if (instrument.type === SynthTypes.DRUMS) {
-        const drum = activeDrum || 'kick';
+    if (LANE_VOICES[instrument.type]) {
+        const drum = laneFor(instrument.type, activeDrum);
         for (let i = 0; i < stepCount; i++) {
             if (!steps[i]?.layers?.[drum]) return false;
         }
@@ -1171,8 +1184,8 @@ export function ensureInstrumentCard(instrument) {
         if (!instr || !socket) return;
         const count = getCurrentStepCount();
         const clearing = _areAllStepsFilled(instr, count, cardEntry.activeDrum, cardEntry.activeSamplerSlot);
-        if (instr.type === SynthTypes.DRUMS) {
-            const drum = cardEntry.activeDrum || 'kick';
+        if (LANE_VOICES[instr.type]) {
+            const drum = laneFor(instr.type, cardEntry.activeDrum);
             for (let i = 0; i < count; i++) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: !clearing });
             }
@@ -1216,6 +1229,19 @@ export function ensureInstrumentCard(instrument) {
                     }
                 });
             }
+        } else if (instr.type === SynthTypes.FX) {
+            const line = randomFxLine(count, { length: instr.params?.length });
+            line.steps.forEach((step, i) => {
+                FX_VOICES.forEach(({ id: drum }) => {
+                    const current = Boolean(instr.steps?.[i]?.layers?.[drum]);
+                    if (current !== step.layers[drum]) {
+                        socket.emit('instrument:step', { instrumentId, stepIndex: i, drum, value: step.layers[drum] });
+                    }
+                });
+            });
+            randomBtn.title = line.riserAt === null
+                ? 'Last roll: drop on step 1 (riser longer than the pattern)'
+                : `Last roll: drop on step 1, riser from step ${line.riserAt + 1}`;
         } else if (instr.type === SynthTypes.SAMPLER) {
             for (let i = 0; i < count; i++) {
                 SAMPLER_SLOT_IDS.forEach(slot => {
@@ -1543,7 +1569,7 @@ export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble', 'tone-stab', 'tone-hoover');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble', 'tone-stab', 'tone-hoover', 'tone-fx');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
@@ -1601,9 +1627,8 @@ export function updateInstrumentCard(card, instrument) {
 
     updateFillButtonLabel(entry, instrument);
 
-    if (instrument.type === SynthTypes.DRUMS
-        && (!entry.activeDrum || !DRUM_VOICES.some((drum) => drum.id === entry.activeDrum))) {
-        entry.activeDrum = DRUM_VOICES[0].id;
+    if (LANE_VOICES[instrument.type]) {
+        entry.activeDrum = laneFor(instrument.type, entry.activeDrum);
     }
 
     // Drum voices are picked from the score's row labels; only the sampler
@@ -2388,7 +2413,7 @@ export function renderStepGrid(container, instrument) {
     if (activePitchPopup) {
         closePitchPopup({ commit: false });
     }
-    if (instrument.type === SynthTypes.DRUMS) {
+    if (LANE_VOICES[instrument.type]) {
         renderDrumStepGrid(container, instrument);
     } else if (instrument.type === SynthTypes.SAMPLER) {
         renderSamplerStepGrid(container, instrument);
@@ -2701,23 +2726,26 @@ function refreshVoiceSelection(entry, voiceId) {
     });
 }
 
+// Lane grid for the Rave Kit (one lane per voice) and FX (one per effect).
 export function renderDrumStepGrid(container, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     if (!entry) {
         return;
     }
+    const voices = LANE_VOICES[instrument.type] || DRUM_VOICES;
+    const emptyStep = LANE_EMPTY_STEP[instrument.type] || createEmptyDrumStep;
     const steps = instrument.steps || (instrument.steps = []);
     const stepAt = (index) => {
-        const existing = steps[index] || createEmptyDrumStep();
-        existing.layers = { ...createEmptyDrumStep().layers, ...(existing.layers || {}) };
-        existing.active = DRUM_VOICES.some((drum) => existing.layers[drum.id]);
+        const existing = steps[index] || emptyStep();
+        existing.layers = { ...emptyStep().layers, ...(existing.layers || {}) };
+        existing.active = voices.some((drum) => existing.layers[drum.id]);
         steps[index] = existing;
         return existing;
     };
 
     renderHitLanes(container, instrument, {
-        voices: DRUM_VOICES.map((drum) => ({ id: drum.id, label: drum.label })),
-        activeVoice: entry.activeDrum || DRUM_VOICES[0].id,
+        voices: voices.map((drum) => ({ id: drum.id, label: drum.label })),
+        activeVoice: laneFor(instrument.type, entry.activeDrum),
         indicatorClass: 'drum-indicator',
         toggleClass: 'step-toggle drum-step-toggle',
         isOn: (index, drumId) => Boolean(stepAt(index).layers[drumId]),
@@ -2725,7 +2753,7 @@ export function renderDrumStepGrid(container, instrument) {
             const step = stepAt(index);
             const next = !step.layers[drumId];
             step.layers[drumId] = next;
-            step.active = DRUM_VOICES.some((drum) => step.layers[drum.id]);
+            step.active = voices.some((drum) => step.layers[drum.id]);
             if (socket) {
                 socket.emit('instrument:step', {
                     instrumentId: instrument.id,

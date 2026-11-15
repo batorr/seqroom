@@ -4,6 +4,7 @@ import { TEMPO_MIN, TEMPO_MAX, DEFAULT_BPM, NOTE_OPTIONS } from '../constants/au
 import { STEP_COUNT, STEP_COUNT_MIN, STEP_COUNT_MAX } from '../constants/ui.js';
 import { SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
 import { createDrumLayers } from '../shared/drum-kit.js';
+import { createFxLayers } from '../shared/fx.js';
 
 // Color manipulation
 export function hexToRgba(hex, alpha = 1) {
@@ -99,6 +100,9 @@ export function formatParamDisplay(value, def) {
     if (!Number.isFinite(numeric)) {
         return '0';
     }
+    if (typeof def.format === 'function') {
+        return def.format(numeric);
+    }
     if (def.max <= 2) {
         return numeric.toFixed(2);
     }
@@ -128,6 +132,13 @@ export function createEmptyMelodicStep() {
 export function createEmptyDrumStep() {
     return {
         layers: createDrumLayers(),
+        active: false,
+    };
+}
+
+export function createEmptyFxStep() {
+    return {
+        layers: createFxLayers(),
         active: false,
     };
 }

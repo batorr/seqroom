@@ -3,13 +3,14 @@
 
 import { DEFAULT_BPM } from '../constants/audio.js';
 import { STEP_COUNT } from '../constants/ui.js';
-import { SynthTypes, DRUM_VOICES, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
+import { SynthTypes, DRUM_VOICES, FX_VOICES, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
     clampTempo,
     clampValue,
     createEmptyMelodicStep,
     createEmptyDrumStep,
+    createEmptyFxStep,
     createEmptySamplerStep,
     createDefaultSamplerSlot
 } from '../utils/helpers.js';
@@ -198,6 +199,16 @@ export function normalizeInstrument(instrument) {
                 active: DRUM_VOICES.some((drum) => layers[drum.id]),
             };
         }
+        if (instrument.type === SynthTypes.FX) {
+            const base = createEmptyFxStep();
+            const layers = { ...base.layers, ...(step?.layers || {}) };
+            return {
+                ...base,
+                ...step,
+                layers,
+                active: FX_VOICES.some((lane) => layers[lane.id]),
+            };
+        }
         if (instrument.type === SynthTypes.SAMPLER) {
             return normalizeSamplerStep(step);
         }
@@ -209,9 +220,11 @@ export function normalizeInstrument(instrument) {
     while (normalizedSteps.length < normalizedStepCount) {
         const template = instrument.type === SynthTypes.DRUMS
             ? createEmptyDrumStep()
-            : instrument.type === SynthTypes.SAMPLER
-                ? createEmptySamplerStep()
-                : createEmptyMelodicStep();
+            : instrument.type === SynthTypes.FX
+                ? createEmptyFxStep()
+                : instrument.type === SynthTypes.SAMPLER
+                    ? createEmptySamplerStep()
+                    : createEmptyMelodicStep();
         normalizedSteps.push({ ...template });
     }
 
@@ -324,6 +337,8 @@ export function ensureLocalInstrumentCapacity(instrument, stepCount) {
         let template;
         if (instrument.type === SynthTypes.DRUMS) {
             template = createEmptyDrumStep();
+        } else if (instrument.type === SynthTypes.FX) {
+            template = createEmptyFxStep();
         } else if (instrument.type === SynthTypes.SAMPLER) {
             template = createEmptySamplerStep();
         } else {

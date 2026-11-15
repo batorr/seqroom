@@ -29,6 +29,7 @@ import { schedulePolySynth } from './instruments/poly-synth.js';
 import { scheduleRumble } from './instruments/rumble.js';
 import { scheduleRaveStab } from './instruments/rave-stab.js';
 import { scheduleHoover } from './instruments/hoover.js';
+import { scheduleFx, silenceFx } from './instruments/fx.js';
 
 // A step that is due less than this far in the past is still played (a few
 // ms late beats silence); anything later is dropped.
@@ -80,6 +81,8 @@ export function stopAudioScheduler() {
     audioState.nextStepIndex = 0;
     audioState.lastScheduledTime = -Infinity;
     audioState.scheduledPlayId = null;
+    // Risers can run for bars; fade out whatever is still sounding.
+    silenceFx();
     stopPlayheadLoop();
     withPlaybackIndicators((updatePlaybackIndicators) => updatePlaybackIndicators(-1));
 }
@@ -232,6 +235,9 @@ export function scheduleInstrumentStep(instrument, step, prevStep, when, stepDur
             break;
         case SynthTypes.HOOVER:
             scheduleHoover(instrument, step, when, ctx, stepDuration);
+            break;
+        case SynthTypes.FX:
+            scheduleFx(instrument, step, when, ctx, stepDuration);
             break;
         case SynthTypes.POLY:
         default:

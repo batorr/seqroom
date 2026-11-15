@@ -5,6 +5,7 @@ import { DRUM_PARAMS, DRUM_KIT_PARAM_KEYS, DRUM_VOICE_PARAM_KEYS } from '../shar
 import { RUMBLE_PARAMS, RUMBLE_PARAM_KEYS } from '../shared/rumble.js';
 import { STAB_PARAMS, STAB_PARAM_KEYS, STAB_CHORDS } from '../shared/rave-stab.js';
 import { HOOVER_PARAMS, HOOVER_PARAM_KEYS } from '../shared/hoover.js';
+import { FX_PARAMS, FX_PARAM_KEYS, fxLengthSteps } from '../shared/fx.js';
 
 // Instrument types enum
 export const SynthTypes = Object.freeze({
@@ -15,10 +16,12 @@ export const SynthTypes = Object.freeze({
     RUMBLE: 'rumble',
     STAB: 'rave-stab',
     HOOVER: 'hoover',
+    FX: 'fx',
 });
 
-// Rave Kit voices (shared with the server).
+// Rave Kit voices and FX lanes (shared with the server).
 export { DRUM_VOICES } from '../shared/drum-kit.js';
+export { FX_VOICES } from '../shared/fx.js';
 
 // Sampler slot configuration
 export const SAMPLER_SLOT_CONFIG = [
@@ -54,6 +57,11 @@ const STAB_PARAM_DEFS = [
 
 // Hoover sliders, from the schema shared with the server.
 const HOOVER_PARAM_DEFS = HOOVER_PARAM_KEYS.map((key) => sliderParam(key, HOOVER_PARAMS[key].label, HOOVER_PARAMS[key].min, HOOVER_PARAMS[key].max, 0.01));
+
+// FX sliders; Length snaps to 4, 8, 16, 32 or 64 steps and says so.
+const FX_PARAM_DEFS = FX_PARAM_KEYS.map((key) => (key === 'length'
+    ? { ...sliderParam(key, FX_PARAMS[key].label, 0, 1, 0.25), format: (value) => `${fxLengthSteps(value)} steps` }
+    : sliderParam(key, FX_PARAMS[key].label, FX_PARAMS[key].min, FX_PARAMS[key].max, 0.01)));
 
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
@@ -130,6 +138,12 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             typeLabel: 'Hoover',
             toneClass: 'tone-hoover',
             params: HOOVER_PARAM_DEFS,
+        },
+        [SynthTypes.FX]: {
+            label: 'FX',
+            typeLabel: 'FX',
+            toneClass: 'tone-fx',
+            params: FX_PARAM_DEFS,
         },
     };
 }
