@@ -3,6 +3,7 @@
 import { sliderParam, selectParam } from '../utils/helpers.js';
 import { DRUM_PARAMS, DRUM_KIT_PARAM_KEYS, DRUM_VOICE_PARAM_KEYS } from '../shared/drum-kit.js';
 import { RUMBLE_PARAMS, RUMBLE_PARAM_KEYS } from '../shared/rumble.js';
+import { STAB_PARAMS, STAB_PARAM_KEYS, STAB_CHORDS } from '../shared/rave-stab.js';
 
 // Instrument types enum
 export const SynthTypes = Object.freeze({
@@ -11,6 +12,7 @@ export const SynthTypes = Object.freeze({
     POLY: 'poly-synth',
     SAMPLER: 'sampler',
     RUMBLE: 'rumble',
+    STAB: 'rave-stab',
 });
 
 // Rave Kit voices (shared with the server).
@@ -41,6 +43,12 @@ export const DRUM_VOICE_PARAM_DEFS = Object.fromEntries(
 
 // Rumble sliders, from the schema shared with the server.
 const RUMBLE_PARAM_DEFS = RUMBLE_PARAM_KEYS.map((key) => sliderParam(key, RUMBLE_PARAMS[key].label, RUMBLE_PARAMS[key].min, RUMBLE_PARAMS[key].max, 0.01));
+
+// Rave Stab sliders plus the chord shape, from the schema shared with the server.
+const STAB_PARAM_DEFS = [
+    ...STAB_PARAM_KEYS.map((key) => sliderParam(key, STAB_PARAMS[key].label, STAB_PARAMS[key].min, STAB_PARAMS[key].max, 0.01)),
+    selectParam('chord', 'Chord', STAB_CHORDS.map(({ value, label }) => ({ value, label }))),
+];
 
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
@@ -105,6 +113,12 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             typeLabel: 'Rumble',
             toneClass: 'tone-rumble',
             params: RUMBLE_PARAM_DEFS,
+        },
+        [SynthTypes.STAB]: {
+            label: 'Rave Stab',
+            typeLabel: 'Stab',
+            toneClass: 'tone-stab',
+            params: STAB_PARAM_DEFS,
         },
     };
 }

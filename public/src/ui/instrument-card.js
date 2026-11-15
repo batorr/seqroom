@@ -20,6 +20,7 @@ import { STEP_COUNT, STEP_GRID_COLUMNS } from '../constants/ui.js';
 import { computeSlurs } from '../shared/slurs.js';
 import { randomAcidLine } from '../shared/acid-line.js';
 import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../shared/rumble.js';
+import { randomStabLine, STAB_DEFAULT_PITCH } from '../shared/rave-stab.js';
 import { SynthTypes, DRUM_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
@@ -710,9 +711,18 @@ function randomDrumHits(stepIndex) {
     };
 }
 
-// What a rumble roll follows in the room: the first Rave Kit's kick lane
-// (so every hit ducks with a kick) and the acid basslines' most common note.
-function rumbleRollContext() {
+// The pitch Fill's Clear resets a melodic step to, per instrument type.
+const FILL_CLEAR_PITCH = {
+    [SynthTypes.TB303]: 'C2',
+    [SynthTypes.POLY]: 'C4',
+    [SynthTypes.RUMBLE]: RUMBLE_DEFAULT_PITCH,
+    [SynthTypes.STAB]: STAB_DEFAULT_PITCH,
+};
+
+// What Random follows in the room: the first Rave Kit's kick lane (so every
+// rumble hit ducks with a kick) and the acid basslines' most common note
+// (the key for the rumble and the stabs).
+function roomRollContext() {
     const instruments = state.instrumentOrder.map((id) => state.instruments.get(id)).filter(Boolean);
     const kit = instruments.find((instrument) => instrument.type === SynthTypes.DRUMS);
     const kicks = kit
@@ -1170,11 +1180,7 @@ export function ensureInstrumentCard(instrument) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, slot, value: !clearing });
             }
         } else {
-            const defaultPitch = instr.type === SynthTypes.TB303
-                ? 'C2'
-                : instr.type === SynthTypes.POLY
-                    ? 'C4'
-                    : instr.type === SynthTypes.RUMBLE ? RUMBLE_DEFAULT_PITCH : 'C3';
+            const defaultPitch = FILL_CLEAR_PITCH[instr.type] || 'C3';
             for (let i = 0; i < count; i++) {
                 const step = clearing ? { active: false, pitch: defaultPitch } : { active: true };
                 if (clearing && instr.type === SynthTypes.TB303) {
@@ -1221,11 +1227,17 @@ export function ensureInstrumentCard(instrument) {
             });
             randomBtn.title = `Last roll: ${line.root} ${line.scale}`;
         } else if (instr.type === SynthTypes.RUMBLE) {
-            const line = randomRumbleLine(count, rumbleRollContext());
+            const line = randomRumbleLine(count, roomRollContext());
             line.steps.forEach((step, i) => {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             });
             randomBtn.title = `Last roll: ${line.pitch}`;
+        } else if (instr.type === SynthTypes.STAB) {
+            const line = randomStabLine(count, { rootClass: roomRollContext().rootClass });
+            line.steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
+            randomBtn.title = `Last roll: ${line.root}, ${line.rhythm}`;
         } else {
             const steps = Array.from({ length: count }, () => ({
                 active: Math.random() < 0.5,
@@ -1523,7 +1535,7 @@ export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
     const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-sampler', 'tone-rumble', 'tone-stab');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
