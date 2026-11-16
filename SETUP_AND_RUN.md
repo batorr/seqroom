@@ -56,7 +56,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 2. Click **Create Room**. A modal prompts for a room name (letters, numbers, spaces, and hyphens are allowed). The server converts it to a URL slug and opens the sequencer.
 3. Inside the room, click **Invite** to generate a signed invite link (`/r/<slug>?inv=<token>`). Share that link with collaborators.
 4. Collaborators open the invite link directly, or click **Join Room** on the landing page and paste the link or token. They immediately receive the full transport/instrument state.
-5. Invite tokens expire after 1 hour. Rooms are kept alive for up to 1 hour after the last member leaves, then automatically cleaned up.
+5. Invite tokens expire after 1 hour. Rooms are kept alive for 15 minutes after the last member leaves, then automatically cleaned up.
 6. Use **Leave Room** to return to the landing page.
 
 ### Instruments and Steps
@@ -96,7 +96,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 
 ## Important Notes
 - **Audio unlock**: Most browsers require a user gesture before starting the AudioContext. `app.js` calls `primeAudioUnlock`, but you still need to click once when prompted.
-- **Security**: There is no user authentication or data persistence. Rate limiting is active server-side (room creation, joins, instrument edits, and tempo changes). Deploy only on trusted networks.
+- **Security**: There is no user authentication or data persistence. Rate limiting is active server-side (room creation, joins, instrument edits, and tempo changes), keyed on the visitor's IP behind a proxy (`lib/client-ip.js`: on Render, or with `TRUST_PROXY=1`). A server holds at most 500 rooms and 24 instruments per room (`SEQROOM_MAX_ROOMS`, `SEQROOM_MAX_INSTRUMENTS_PER_ROOM`); client messages are capped at 100 KB.
 - **Resource usage**: Every client renders all instruments it can see. Keep card counts reasonable on low-power devices.
 - **Single server instance**: All connected rooms share the same Node process; stopping the server clears every room.
 

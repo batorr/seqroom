@@ -6,6 +6,7 @@ const http = require('http');
 const { randomUUID, randomBytes, createHmac, timingSafeEqual } = require('crypto');
 const { Server } = require('socket.io');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
+const { clientAddress, trustProxyFromEnv } = require('./lib/client-ip.js');
 
 const PORT = process.env.PORT || 3000;
 const STEP_COUNT = 16;
@@ -646,7 +647,20 @@ let stabKit = null;
 let hooverKit = null;
 let fxKit = null;
 
-const ROOM_EMPTY_TIMEOUT_MS = 60 * 60 * 1000; // 1 óra
+// Limits that keep one instance's memory bounded whatever visitors do.
+// Overridable through the environment (e.g. on Render) or for tests.
+const envLimit = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+};
+const MAX_ROOMS = envLimit('SEQROOM_MAX_ROOMS', 500);
+const MAX_INSTRUMENTS_PER_ROOM = envLimit('SEQROOM_MAX_INSTRUMENTS_PER_ROOM', 24);
+
+// An emptied room waits this long for its people to reconnect.
+const ROOM_EMPTY_TIMEOUT_MS = 15 * 60 * 1000;
+
+// Rate limits key on the visitor's address, not the proxy's (lib/client-ip.js).
+const TRUST_PROXY = trustProxyFromEnv();
 
 function scheduleRoomCleanup(roomId) {
   clearRoomCleanup(roomId);
@@ -667,6 +681,22 @@ function clearRoomCleanup(roomId) {
     clearTimeout(existing);
     roomEmptyTimers.delete(roomId);
   }
+}
+
+// Room for a new room: at the cap, rooms nobody is in (only kept for
+// reconnects) go first. Returns false when every room is occupied.
+function makeRoomForNewRoom() {
+  if (rooms.size < MAX_ROOMS) {
+    return true;
+  }
+  for (const [roomId, room] of rooms) {
+    if (room.members.size === 0) {
+      clearRoomCleanup(roomId);
+      rooms.delete(roomId);
+      if (room.slug) slugToRoomId.delete(room.slug);
+    }
+  }
+  return rooms.size < MAX_ROOMS;
 }
 
 const app = express();
@@ -750,13 +780,18 @@ function registerSafeHandler(socket, event, handler) {
 
 io.on('connection', (socket) => {
   const on = (event, handler) => registerSafeHandler(socket, event, handler);
+  socket.data.clientIp = clientAddress(socket.handshake, { trustProxy: TRUST_PROXY });
 
   on('room:create', async ({ roomName, displayName } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
-    if (!await checkRateLimit(rateLimiters.roomCreate, socket.handshake.address, socket, respond)) return;
+    if (!await checkRateLimit(rateLimiters.roomCreate, socket.data.clientIp, socket, respond)) return;
     const sanitizedName = sanitizeRoomName(roomName);
     if (!sanitizedName) {
       respond({ ok: false, error: 'invalid-room-name' });
+      return;
+    }
+    if (!makeRoomForNewRoom()) {
+      respond({ ok: false, error: 'server-full' });
       return;
     }
 
@@ -779,7 +814,7 @@ io.on('connection', (socket) => {
 
   on('joinWithInvite', async ({ token } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
-    if (!await checkRateLimit(rateLimiters.joinWithInvite, socket.handshake.address, socket, respond)) return;
+    if (!await checkRateLimit(rateLimiters.joinWithInvite, socket.data.clientIp, socket, respond)) return;
     const validation = validateInviteToken(token);
     if (!validation.ok) {
       respond({ ok: false, error: validation.error });
@@ -949,6 +984,10 @@ io.on('connection', (socket) => {
     const room = getRoomForSocket(socket);
     if (!room) {
       respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+    if (room.instruments.size >= MAX_INSTRUMENTS_PER_ROOM) {
+      respond({ ok: false, error: 'instrument-limit', limit: MAX_INSTRUMENTS_PER_ROOM });
       return;
     }
 

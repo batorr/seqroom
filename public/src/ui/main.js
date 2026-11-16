@@ -243,7 +243,11 @@ export function setupSynthModal(socket) {
             };
             socket.emit('instrument:add', payload, (response = {}) => {
                 if (!response.ok) {
-                    if (response.error) {
+                    if (response.error === 'instrument-limit') {
+                        window.alert(`This room already has ${response.limit || 'the most'} instruments, as many as a room can hold. Remove one to add another.`);
+                    } else if (response.error === 'rate-limited') {
+                        window.alert('Instruments are being added too fast. Wait a moment and try again.');
+                    } else if (response.error) {
                         console.error('Failed to add instrument:', response.error);
                     }
                     return;

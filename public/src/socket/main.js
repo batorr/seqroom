@@ -825,6 +825,12 @@ export function handleRoomError(mode, errorCode) {
         window.alert('Invite token is invalid. Ask the owner for a new link.');
     } else if (mode === 'join' && errorCode === 'token-expired') {
         window.alert('Invite token has expired. Request a new invite.');
+    } else if (mode === 'create' && errorCode === 'server-full') {
+        window.alert('Seqroom is full right now: every room slot is in use. Try again in a few minutes.');
+    } else if (errorCode === 'rate-limited') {
+        window.alert(mode === 'create'
+            ? 'Too many rooms were opened from your connection just now. Wait a minute and try again.'
+            : 'Too many join attempts from your connection just now. Wait a minute and try again.');
     } else if (errorCode === 'room-not-found') {
         window.alert('Could not find that room. It may have expired.');
     } else if (errorCode === 'invalid-room-id') {
