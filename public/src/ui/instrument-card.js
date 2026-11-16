@@ -487,9 +487,12 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
         }
     }, { passive: false });
 
-    // Swipe (or drag with a mouse) up to raise, down to lower: one step per
-    // stretch of travel, so a long swipe runs through several values. A tap
-    // on a neighbour value moves one step towards it.
+    // A finger drags the column like a picker wheel: the higher value sits
+    // above, so swiping up pulls the lower value below into the middle and
+    // swiping down pulls the higher one. A mouse drag works like a knob
+    // instead, up to raise (the neighbours are hidden on such screens).
+    // One step per stretch of travel, so a long swipe runs through several
+    // values. A tap on a neighbour value moves one step towards it.
     const SWIPE_STEP_PX = { note: 22, octave: 36 };
     const TAP_SLOP_PX = 6;
     const attachSwipe = (column, field, adjust) => {
@@ -510,6 +513,8 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
                 id: event.pointerId,
                 startY: event.clientY,
                 anchorY: event.clientY,
+                // +1: moving up raises (mouse); -1: the values follow the finger.
+                direction: event.pointerType === 'mouse' ? 1 : -1,
                 moved: false,
                 tapStep: neighbor && neighbor.textContent ? Number(neighbor.dataset.step) : 0,
             };
@@ -522,10 +527,10 @@ function openPitchPopup({ anchorEl, noteEl, selectEl, step, instrumentId, stepIn
                 drag.moved = true;
             }
             const stepPx = SWIPE_STEP_PX[field];
-            const steps = Math.trunc((drag.anchorY - event.clientY) / stepPx);
+            const steps = Math.trunc((drag.direction * (drag.anchorY - event.clientY)) / stepPx);
             if (steps !== 0) {
                 adjust(steps);
-                drag.anchorY -= steps * stepPx;
+                drag.anchorY -= drag.direction * steps * stepPx;
             }
         });
         const endDrag = (event) => {
