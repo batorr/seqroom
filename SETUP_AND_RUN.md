@@ -60,8 +60,8 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 6. Use **Leave Room** to return to the landing page.
 
 ### Instruments and Steps
-- Open the add-instrument dialog to add Acid Bass, Rave Kit, Rumble, Rave Stab, Hoover, FX or Poly Synth instruments.
-- Each instrument is a row of the score with type-specific lanes (TB-303 accent/note/pitch/slide, poly note/pitch, one lane per Rave Kit voice or FX effect); the selected instrument's parameters show in the inspector below the score.
+- Open the add-instrument dialog to add Acid Bass, Rave Kit, Rumble, Rave Stab, Hoover, FX or Pad instruments.
+- Each instrument is a row of the score with type-specific lanes (TB-303 accent/note/pitch/slide, Pad note/pitch, one lane per Rave Kit voice or FX effect); the selected instrument's parameters show in the inspector below the score.
 - Step counts can be set between 1 and 128 per instrument.
 - Locks prevent conflicting edits; an instrument locked by someone else shows "Locked" and its steps and parameters are disabled.
 

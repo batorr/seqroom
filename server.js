@@ -32,7 +32,8 @@ const INVITE_TOKEN_HEADER_SEGMENT = base64UrlEncode(Buffer.from(JSON.stringify(I
 const SynthTypes = Object.freeze({
   TB303: 'tb-303',
   DRUMS: 'drum-kit',
-  SIMPLE: 'poly-synth',
+  // The old Poly Synth's id, kept so saved rooms open with a Pad.
+  PAD: 'poly-synth',
   RUMBLE: 'rumble',
   STAB: 'rave-stab',
   HOOVER: 'hoover',
@@ -64,8 +65,8 @@ function defaultInstrumentName(type) {
       return 'Acid Bass';
     case SynthTypes.DRUMS:
       return 'Rave Kit';
-    case SynthTypes.SIMPLE:
-      return 'Poly Synth';
+    case SynthTypes.PAD:
+      return 'Pad';
     case SynthTypes.RUMBLE:
       return 'Rumble';
     case SynthTypes.STAB:
@@ -135,19 +136,9 @@ function createDefaultParams(type) {
       return hooverKit.normalizeHooverParams({});
     case SynthTypes.FX:
       return fxKit.normalizeFxParams({});
-    case SynthTypes.SIMPLE:
+    case SynthTypes.PAD:
     default:
-      return {
-        volume: 0.8,
-        attack: 0.05,
-        decay: 0.3,
-        release: 0.4,
-        cutoff: 0.6,
-        resonance: 0.3,
-        delay: 0,
-        reverb: 0.2,
-        waveform: 'sine',
-      };
+      return padKit.normalizePadParams({});
   }
 }
 
@@ -168,7 +159,7 @@ function createStepTemplate(type) {
 
   const defaultPitchByType = {
     [SynthTypes.TB303]: 'C2',
-    [SynthTypes.SIMPLE]: 'C4',
+    [SynthTypes.PAD]: padKit.PAD_DEFAULT_PITCH,
     [SynthTypes.RUMBLE]: rumbleKit.RUMBLE_DEFAULT_PITCH,
     [SynthTypes.STAB]: stabKit.STAB_DEFAULT_PITCH,
     [SynthTypes.HOOVER]: hooverKit.HOOVER_DEFAULT_PITCH,
@@ -275,6 +266,9 @@ function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.FX) {
     instrument.params = fxKit.normalizeFxParams(instrument.params);
   }
+  if (instrument.type === SynthTypes.PAD) {
+    instrument.params = padKit.normalizePadParams(instrument.params);
+  }
   if (
     instrument.params
     && typeof instrument.params === 'object'
@@ -340,6 +334,8 @@ function cloneInstrument(instrument) {
     base.params = hooverKit.normalizeHooverParams(instrument.params);
   } else if (instrument.type === SynthTypes.FX) {
     base.params = fxKit.normalizeFxParams(instrument.params);
+  } else if (instrument.type === SynthTypes.PAD) {
+    base.params = padKit.normalizePadParams(instrument.params);
   } else {
     base.params = { ...instrument.params };
     if (
@@ -499,6 +495,12 @@ function applyInstrumentParams(instrument, params = {}) {
     return;
   }
 
+  if (instrument.type === SynthTypes.PAD) {
+    instrument.params = padKit.normalizePadParams(instrument.params);
+    padKit.applyPadParamUpdates(instrument.params, params);
+    return;
+  }
+
   if (!params || typeof params !== 'object') {
     return;
   }
@@ -581,22 +583,17 @@ function applyStepChanges(step, changes = {}) {
 
 const gunzip = promisify(zlib.gunzip);
 
-// The Acid Bass and Poly Synth have no shared parameter schema: a file may
-// only set the parameters a new one has, of the same kind, within the range
-// of their sliders (0..1 unless listed here).
-const SYNTH_PARAM_MAX = {
-  [SynthTypes.SIMPLE]: { attack: 2, decay: 2, release: 3 },
-};
-
+// The Acid Bass has no shared parameter schema: a file may only set the
+// parameters a new one has, of the same kind, within the range of its
+// sliders (0..1).
 function filterSynthParams(type, params) {
   const defaults = createDefaultParams(type);
-  const maxima = SYNTH_PARAM_MAX[type] || {};
   const filtered = {};
   for (const [key, value] of Object.entries(params)) {
     if (!Object.prototype.hasOwnProperty.call(defaults, key) || typeof value !== typeof defaults[key]) {
       continue;
     }
-    filtered[key] = typeof value === 'number' ? clamp(value, 0, maxima[key] ?? 1) : value;
+    filtered[key] = typeof value === 'number' ? clamp(value, 0, 1) : value;
   }
   return filtered;
 }
@@ -643,7 +640,7 @@ function buildRoomContent(file, { creatorUserId }) {
       creatorUserId,
       creatorDisplayName: entry.creatorDisplayName,
     });
-    const hasSchema = entry.type !== SynthTypes.TB303 && entry.type !== SynthTypes.SIMPLE;
+    const hasSchema = entry.type !== SynthTypes.TB303;
     applyInstrumentParams(instrument, hasSchema ? entry.params : filterSynthParams(entry.type, entry.params));
     instrument.muted = entry.muted;
 
@@ -776,6 +773,7 @@ let rumbleKit = null;
 let stabKit = null;
 let hooverKit = null;
 let fxKit = null;
+let padKit = null;
 let roomFileKit = null;
 
 // Limits that keep one instance's memory bounded whatever visitors do.
@@ -1162,7 +1160,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const instrumentType = type && Object.values(SynthTypes).includes(type) ? type : SynthTypes.SIMPLE;
+    const instrumentType = type && Object.values(SynthTypes).includes(type) ? type : SynthTypes.PAD;
 
     try {
       const instrument = createInstrument(instrumentType, {
@@ -1815,18 +1813,19 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline, the drum kit, rumble, rave stab, hoover and FX
-// schemas and the room file format are ES modules shared with the browser,
-// so they are loaded before the server accepts connections.
+// The transport timeline, the drum kit, rumble, rave stab, hoover, FX and
+// pad schemas and the room file format are ES modules shared with the
+// browser, so they are loaded before the server accepts connections.
 const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
-Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js'), loadShared('fx.js'), loadShared('room-file.js')])
-  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule, fxModule, roomFileModule]) => {
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js'), loadShared('fx.js'), loadShared('pad.js'), loadShared('room-file.js')])
+  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule, fxModule, padModule, roomFileModule]) => {
     timeline = timelineModule;
     drumKit = drumKitModule;
     rumbleKit = rumbleModule;
     stabKit = stabModule;
     hooverKit = hooverModule;
     fxKit = fxModule;
+    padKit = padModule;
     roomFileKit = roomFileModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);

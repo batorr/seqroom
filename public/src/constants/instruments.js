@@ -6,12 +6,14 @@ import { RUMBLE_PARAMS, RUMBLE_PARAM_KEYS } from '../shared/rumble.js';
 import { STAB_PARAMS, STAB_PARAM_KEYS, STAB_CHORDS } from '../shared/rave-stab.js';
 import { HOOVER_PARAMS, HOOVER_PARAM_KEYS } from '../shared/hoover.js';
 import { FX_PARAMS, FX_PARAM_KEYS, fxLengthSteps } from '../shared/fx.js';
+import { PAD_PARAMS, PAD_PARAM_KEYS, PAD_CHORDS, padLengthSteps } from '../shared/pad.js';
 
 // Instrument types enum
 export const SynthTypes = Object.freeze({
     TB303: 'tb-303',
     DRUMS: 'drum-kit',
-    POLY: 'poly-synth',
+    // The old Poly Synth's id, kept so saved rooms open with a Pad.
+    PAD: 'poly-synth',
     RUMBLE: 'rumble',
     STAB: 'rave-stab',
     HOOVER: 'hoover',
@@ -48,6 +50,15 @@ const FX_PARAM_DEFS = FX_PARAM_KEYS.map((key) => (key === 'length'
     ? { ...sliderParam(key, FX_PARAMS[key].label, 0, 1, 0.25), format: (value) => `${fxLengthSteps(value)} steps` }
     : sliderParam(key, FX_PARAMS[key].label, FX_PARAMS[key].min, FX_PARAMS[key].max, 0.01)));
 
+// Pad sliders plus the chord shape; Length snaps to 2, 4, 8, 16 or 32
+// steps and says so.
+const PAD_PARAM_DEFS = [
+    ...PAD_PARAM_KEYS.map((key) => (key === 'length'
+        ? { ...sliderParam(key, PAD_PARAMS[key].label, 0, 1, 0.25), format: (value) => `${padLengthSteps(value)} steps` }
+        : sliderParam(key, PAD_PARAMS[key].label, PAD_PARAMS[key].min, PAD_PARAMS[key].max, 0.01))),
+    selectParam('chord', 'Chord', PAD_CHORDS.map(({ value, label }) => ({ value, label }))),
+];
+
 // Instrument library - initialized at module load
 export const INSTRUMENT_LIBRARY = createInstrumentLibrary(sliderParam, selectParam);
 
@@ -79,26 +90,11 @@ function createInstrumentLibrary(sliderParam, selectParam) {
             toneClass: 'tone-drums',
             params: DRUM_KIT_PARAM_DEFS,
         },
-        [SynthTypes.POLY]: {
-            label: 'Poly Synth',
-            typeLabel: 'Poly',
-            toneClass: 'tone-poly',
-            params: [
-                sliderParam('volume', 'Volume', 0, 1, 0.01),
-                sliderParam('attack', 'Attack', 0, 2, 0.01),
-                sliderParam('decay', 'Decay', 0, 2, 0.01),
-                sliderParam('release', 'Release', 0, 3, 0.01),
-                sliderParam('cutoff', 'Cutoff', 0, 1, 0.01),
-                sliderParam('resonance', 'Resonance', 0, 1, 0.01),
-                sliderParam('delay', 'Delay', 0, 1, 0.01),
-                sliderParam('reverb', 'Reverb', 0, 1, 0.01),
-                selectParam('waveform', 'Waveform', [
-                    { value: 'sine', label: 'Sine' },
-                    { value: 'triangle', label: 'Triangle' },
-                    { value: 'sawtooth', label: 'Saw' },
-                    { value: 'square', label: 'Square' },
-                ]),
-            ],
+        [SynthTypes.PAD]: {
+            label: 'Pad',
+            typeLabel: 'Pad',
+            toneClass: 'tone-pad',
+            params: PAD_PARAM_DEFS,
         },
         [SynthTypes.RUMBLE]: {
             label: 'Rumble',

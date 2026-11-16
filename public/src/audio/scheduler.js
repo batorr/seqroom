@@ -25,7 +25,7 @@ import {
 import { scheduleTB303 } from './instruments/tb303.js';
 import { scheduleDrums } from './instruments/drums.js';
 import { getAudioGraph } from './graph.js';
-import { schedulePolySynth } from './instruments/poly-synth.js';
+import { schedulePad, silencePads } from './instruments/pad.js';
 import { scheduleRumble } from './instruments/rumble.js';
 import { scheduleRaveStab } from './instruments/rave-stab.js';
 import { scheduleHoover } from './instruments/hoover.js';
@@ -98,8 +98,10 @@ export function stopAudioScheduler() {
     audioState.lastScheduledTime = -Infinity;
     audioState.scheduledPlayId = null;
     keepScreenAwake(false);
-    // Risers can run for bars; fade out whatever is still sounding.
+    // Risers and pad chords can run for bars; fade out whatever is still
+    // sounding.
     silenceFx();
+    silencePads();
     stopPlayheadLoop();
     withPlaybackIndicators((updatePlaybackIndicators) => updatePlaybackIndicators(-1));
 }
@@ -264,9 +266,9 @@ export function scheduleInstrumentStep(instrument, step, prevStep, when, stepDur
         case SynthTypes.FX:
             scheduleFx(instrument, step, when, ctx, stepDuration);
             break;
-        case SynthTypes.POLY:
+        case SynthTypes.PAD:
         default:
-            schedulePolySynth(instrument, step, when, ctx);
+            schedulePad(instrument, step, when, ctx, stepDuration);
             break;
     }
 }

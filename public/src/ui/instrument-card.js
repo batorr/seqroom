@@ -10,6 +10,12 @@ export function isInstrumentMuted(instrumentId) {
 
 export function setInstrumentMuted(instrumentId, muted) {
     if (muted) {
+        if (!audioState.mutedInstruments.has(instrumentId)) {
+            // A pad chord can hold for two bars: let it go with the mute.
+            import('../audio/instruments/pad.js').then(({ releasePad }) => {
+                releasePad(instrumentId);
+            }).catch(console.error);
+        }
         audioState.mutedInstruments.add(instrumentId);
     } else {
         audioState.mutedInstruments.delete(instrumentId);
@@ -22,6 +28,7 @@ import { randomAcidLine } from '../shared/acid-line.js';
 import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../shared/rumble.js';
 import { randomStabLine, STAB_DEFAULT_PITCH } from '../shared/rave-stab.js';
 import { randomHooverLine, HOOVER_DEFAULT_PITCH } from '../shared/hoover.js';
+import { randomPadLine, PAD_DEFAULT_PITCH } from '../shared/pad.js';
 import { randomFxLine, FX_DEFAULT_LANE } from '../shared/fx.js';
 import { randomDrumHits } from '../shared/drum-kit.js';
 import { SynthTypes, DRUM_VOICES, FX_VOICES, DRUM_VOICE_PARAM_DEFS } from '../constants/instruments.js';
@@ -695,7 +702,7 @@ function emitInstrumentParams(instrumentId, params) {
 // The pitch Fill's Clear resets a melodic step to, per instrument type.
 const FILL_CLEAR_PITCH = {
     [SynthTypes.TB303]: 'C2',
-    [SynthTypes.POLY]: 'C4',
+    [SynthTypes.PAD]: PAD_DEFAULT_PITCH,
     [SynthTypes.RUMBLE]: RUMBLE_DEFAULT_PITCH,
     [SynthTypes.STAB]: STAB_DEFAULT_PITCH,
     [SynthTypes.HOOVER]: HOOVER_DEFAULT_PITCH,
@@ -703,7 +710,7 @@ const FILL_CLEAR_PITCH = {
 
 // What Random follows in the room: the first Rave Kit's kick lane (so every
 // rumble hit ducks with a kick) and the acid basslines' most common note
-// (the key for the rumble, the stabs and the hoover).
+// (the key for the rumble, the stabs, the hoover and the pad).
 function roomRollContext() {
     const instruments = state.instrumentOrder.map((id) => state.instruments.get(id)).filter(Boolean);
     const kit = instruments.find((instrument) => instrument.type === SynthTypes.DRUMS);
@@ -1180,7 +1187,7 @@ export function ensureInstrumentCard(instrument) {
         const instr = state.instruments.get(instrumentId);
         if (!instr || !socket) return;
         const count = getCurrentStepCount();
-        const randomNotes = instr.type === SynthTypes.POLY ? NOTE_OPTIONS.slice(12, 48) : NOTE_OPTIONS.slice(12, 36); // Poly: C2-B4, others: C2-B3
+        const randomNotes = NOTE_OPTIONS.slice(12, 36); // C2-B3
         if (instr.type === SynthTypes.DRUMS) {
             for (let i = 0; i < count; i++) {
                 const hits = randomDrumHits(i);
@@ -1228,6 +1235,12 @@ export function ensureInstrumentCard(instrument) {
                 socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
             });
             randomBtn.title = `Last roll: ${line.root}, ${line.rhythm}`;
+        } else if (instr.type === SynthTypes.PAD) {
+            const line = randomPadLine(count, { rootClass: roomRollContext().rootClass, length: instr.params?.length });
+            line.steps.forEach((step, i) => {
+                socket.emit('instrument:step', { instrumentId, stepIndex: i, step });
+            });
+            randomBtn.title = `Last roll: ${line.root}, ${line.progression}`;
         } else {
             const steps = Array.from({ length: count }, () => ({
                 active: Math.random() < 0.5,
@@ -1517,9 +1530,9 @@ function updateInstrumentLockState(entry, instrument) {
 
 export function updateInstrumentCard(card, instrument) {
     const entry = socketState.instrumentElements.get(instrument.id);
-    const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.POLY];
+    const definition = INSTRUMENT_LIBRARY[instrument.type] || INSTRUMENT_LIBRARY[SynthTypes.PAD];
     card.dataset.instrumentId = instrument.id;
-    card.classList.remove('tone-acid', 'tone-drums', 'tone-poly', 'tone-rumble', 'tone-stab', 'tone-hoover', 'tone-fx');
+    card.classList.remove('tone-acid', 'tone-drums', 'tone-pad', 'tone-rumble', 'tone-stab', 'tone-hoover', 'tone-fx');
     if (definition.toneClass) {
         card.classList.add(definition.toneClass);
     }
@@ -1621,6 +1634,9 @@ export function removeInstrumentCard(instrumentId) {
     }).catch(console.error);
     import('../audio/instruments/hoover.js').then(({ releaseHoover }) => {
         releaseHoover(instrumentId);
+    }).catch(console.error);
+    import('../audio/instruments/pad.js').then(({ releasePad }) => {
+        releasePad(instrumentId);
     }).catch(console.error);
     import('../audio/scheduler.js').then(({ getCurrentStepIndex }) => {
         updatePlaybackIndicators(getCurrentStepIndex());
