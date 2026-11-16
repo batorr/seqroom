@@ -640,7 +640,55 @@
 
       .synth-card.collapsed .collapse-toggle-icon { transform: rotate(-45deg); }
       .synth-card.collapsed .synth-body { display: none; }
-      .synth-card.is-muted .synth-body { opacity: 0.4; }
+      .synth-card.is-muted .synth-body,
+      .synth-card.is-muted .step-summary { opacity: 0.4; }
+
+      /* Collapsed row: one thin line per 16 steps on the score's columns; a
+         step is marked when it plays anything (any lane, for lane instruments). */
+      .step-summary { display: none; min-width: 0; padding: 12px 0; }
+      .synth-card.collapsed .step-summary {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+      }
+
+      .summary-line {
+        display: grid;
+        grid-template-columns: var(--lane-col) repeat(16, minmax(0, 1fr));
+        height: 16px;
+      }
+
+      .summary-label {
+        position: sticky;
+        left: var(--label-col);
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        background: var(--paper);
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .summary-cell { position: relative; min-width: 0; border-left: 1px solid var(--rule-soft); }
+      .summary-cell.beat { border-left-color: var(--rule-beat); }
+      .summary-cell.playing { background: var(--accent-tint); }
+
+      .summary-cell.active::after {
+        content: "";
+        position: absolute;
+        inset: 3px 3px;
+        background: var(--ink);
+      }
+
+      .summary-cell.active.playing::after { background: var(--accent); }
+
+      .summary-cell.step-disabled {
+        background: repeating-linear-gradient(135deg, transparent 0 5px, var(--rule-soft) 5px 6px);
+      }
 
       .instrument-name-input {
         width: 100%;
@@ -1256,6 +1304,7 @@
         .synth-header,
         .score-ruler > span:nth-child(1) { position: static; }
         .lane-label,
+        .summary-label,
         .score-ruler > span:nth-child(2) { left: 0; }
 
         .modal-grid { grid-template-columns: minmax(0, 1fr); }
@@ -1596,6 +1645,7 @@
         <div class="synth-body">
           <div class="step-grid"></div>
         </div>
+        <div class="step-summary" role="img"></div>
       </article>
     </template>
 

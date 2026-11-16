@@ -200,6 +200,11 @@ function bindCollapseToggle(entry, instrumentId) {
         const currentEntry = socketState.instrumentElements.get(instrumentId) || entry;
         const nextCollapsed = !(currentEntry.root?.classList.contains('collapsed'));
         applyCollapseState(currentEntry, instrumentId, nextCollapsed, { persist: true });
+        // Steps clicked while open change the grid in place, so redraw the strip.
+        const instrument = state.instruments.get(instrumentId);
+        if (nextCollapsed && instrument) {
+            renderStepSummary(currentEntry, instrument);
+        }
     });
     entry.collapseButton.dataset.collapseBound = 'true';
 }
@@ -1043,6 +1048,8 @@ export function ensureInstrumentCard(instrument) {
         root: node,
         inspector,
         bodyContainer,
+        summaryContainer: node.querySelector('.step-summary'),
+        summaryCells: [],
         collapseButton: collapseToggle,
         paramsContainer: inspector.querySelector('.synth-params'),
         stepGrid: node.querySelector('.step-grid'),
@@ -1648,6 +1655,8 @@ export function updatePlaybackIndicators(stepIndex) {
         }
         setStepPlaying(stepRefs[entry.playingIndex], false);
         setStepPlaying(stepRefs[nextIndex], true);
+        entry.summaryCells?.[entry.playingIndex]?.classList.remove('playing');
+        entry.summaryCells?.[nextIndex]?.classList.add('playing');
         entry.playingIndex = nextIndex;
     });
 
@@ -1896,6 +1905,67 @@ export function renderStepGrid(container, instrument) {
     } else {
         renderMelodicStepGrid(container, instrument);
     }
+    renderStepSummary(socketState.instrumentElements.get(instrument.id), instrument);
+}
+
+// A step counts as on when it plays anything: for the Rave Kit and FX, any lane.
+function isStepOn(instrument, index) {
+    const step = instrument.steps?.[index];
+    if (!step) {
+        return false;
+    }
+    const voices = LANE_VOICES[instrument.type];
+    if (voices) {
+        return voices.some((voice) => Boolean(step.layers?.[voice.id]));
+    }
+    return Boolean(step.active);
+}
+
+// The strip shown in place of the lanes while the instrument is collapsed.
+function renderStepSummary(entry, instrument) {
+    const container = entry?.summaryContainer;
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+    const stepCount = clampStepCount(instrument.stepCount ?? (Array.isArray(instrument.steps) ? instrument.steps.length : STEP_COUNT));
+    const visibleSteps = getVisibleStepSlots(stepCount);
+    const lineCount = visibleSteps / STEP_GRID_COLUMNS;
+    const cells = [];
+    let onCount = 0;
+
+    for (let line = 0; line < lineCount; line += 1) {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'summary-line';
+        const label = document.createElement('span');
+        label.className = 'summary-label';
+        if (lineCount > 1) {
+            const first = line * STEP_GRID_COLUMNS + 1;
+            label.textContent = `${first}–${first + STEP_GRID_COLUMNS - 1}`;
+        }
+        lineEl.appendChild(label);
+
+        for (let column = 0; column < STEP_GRID_COLUMNS; column += 1) {
+            const index = line * STEP_GRID_COLUMNS + column;
+            const withinPattern = index < stepCount;
+            const on = withinPattern && isStepOn(instrument, index);
+            const cell = document.createElement('span');
+            cell.className = 'summary-cell';
+            cell.classList.toggle('beat', column % 4 === 0);
+            cell.classList.toggle('step-disabled', !withinPattern);
+            cell.classList.toggle('active', on);
+            if (on) {
+                onCount += 1;
+            }
+            lineEl.appendChild(cell);
+            cells.push(cell);
+        }
+        container.appendChild(lineEl);
+    }
+
+    cells[entry.playingIndex]?.classList.add('playing');
+    entry.summaryCells = cells;
+    container.setAttribute('aria-label', `${onCount} of ${stepCount} steps on`);
 }
 
 export function renderMelodicStepGrid(container, instrument) {
