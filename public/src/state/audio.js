@@ -1,5 +1,5 @@
 // Audio State Management Module
-// Manages audio context, recording state, and sampler buffers
+// Manages audio context, recording state, and muted instruments
 
 // Audio context and scheduling state
 export const audioState = {
@@ -27,8 +27,6 @@ export const audioState = {
     recordingByteLength: 0,
     recordingStatsLastUpdate: 0,
     recordingModuleLoaded: false,
-    samplerBuffers: new Map(),
-    pendingSamplerLoads: new Map(),
     mutedInstruments: new Set(),
 };
 
@@ -74,18 +72,6 @@ export function addRecordingChunk(chunk) {
 
 export function clearRecordingChunks() {
     audioState.recordingChunks = [];
-}
-
-export function setSamplerBuffer(key, buffer) {
-    audioState.samplerBuffers.set(key, buffer);
-}
-
-export function deleteSamplerBuffer(key) {
-    audioState.samplerBuffers.delete(key);
-}
-
-export function clearSamplerBuffers() {
-    audioState.samplerBuffers.clear();
 }
 
 // Socket state mutations

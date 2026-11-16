@@ -43,53 +43,6 @@ export function createNoiseBuffer(ctx) {
     return buffer;
 }
 
-// Base64 encoding/decoding for audio samples
-export function base64ToArrayBuffer(base64) {
-    if (typeof base64 !== 'string' || !base64.length) {
-        return null;
-    }
-    try {
-        const binary = window.atob(base64);
-        const length = binary.length;
-        const bytes = new Uint8Array(length);
-        for (let index = 0; index < length; index += 1) {
-            bytes[index] = binary.charCodeAt(index);
-        }
-        return bytes.buffer;
-    } catch (error) {
-        console.error('Sampler: invalid base64 audio data', error);
-        return null;
-    }
-}
-
-export function arrayBufferToBase64(buffer) {
-    if (!(buffer instanceof ArrayBuffer)) {
-        return '';
-    }
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, i + chunkSize);
-        binary += String.fromCharCode.apply(null, chunk);
-    }
-    return window.btoa(binary);
-}
-
-// Create reversed audio buffer
-export function createReversedAudioBuffer(ctx, buffer) {
-    const reversed = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
-    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
-        const source = buffer.getChannelData(channel);
-        const target = reversed.getChannelData(channel);
-        const lastIndex = source.length - 1;
-        for (let i = 0; i < source.length; i += 1) {
-            target[i] = source[lastIndex - i];
-        }
-    }
-    return reversed;
-}
-
 // Recording utilities
 export function mergeRecordingChunks(chunks, totalLength) {
     if (!Array.isArray(chunks) || !chunks.length) {

@@ -30,15 +30,12 @@ const SynthTypes = Object.freeze({
   TB303: 'tb-303',
   DRUMS: 'drum-kit',
   SIMPLE: 'poly-synth',
-  SAMPLER: 'sampler',
   RUMBLE: 'rumble',
   STAB: 'rave-stab',
   HOOVER: 'hoover',
   FX: 'fx',
 });
 
-const SAMPLER_SLOT_IDS = ['A', 'B', 'C', 'D', 'E', 'F'];
-const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
 const INSTRUMENT_NAME_MAX_LENGTH = 48;
 const DISPLAY_NAME_MAX_LENGTH = 32;
 
@@ -66,8 +63,6 @@ function defaultInstrumentName(type) {
       return 'Rave Kit';
     case SynthTypes.SIMPLE:
       return 'Poly Synth';
-    case SynthTypes.SAMPLER:
-      return 'Sampler';
     case SynthTypes.RUMBLE:
       return 'Rumble';
     case SynthTypes.STAB:
@@ -137,13 +132,6 @@ function createDefaultParams(type) {
       return hooverKit.normalizeHooverParams({});
     case SynthTypes.FX:
       return fxKit.normalizeFxParams({});
-    case SynthTypes.SAMPLER:
-      return {
-        slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
-          acc[slotId] = createDefaultSamplerSlot(slotId);
-          return acc;
-        }, {}),
-      };
     case SynthTypes.SIMPLE:
     default:
       return {
@@ -158,21 +146,6 @@ function createDefaultParams(type) {
         waveform: 'sine',
       };
   }
-}
-
-function createDefaultSamplerSlot(slotId) {
-  return {
-    id: slotId,
-    name: `Slot ${slotId}`,
-    volume: 1,
-    pan: 0,
-    pitch: 0,
-    startOffset: 0,
-    endOffset: 1,
-    reverse: false,
-    mute: false,
-    sample: null,
-  };
 }
 
 function createStepTemplate(type) {
@@ -197,16 +170,6 @@ function createStepTemplate(type) {
     [SynthTypes.STAB]: stabKit.STAB_DEFAULT_PITCH,
     [SynthTypes.HOOVER]: hooverKit.HOOVER_DEFAULT_PITCH,
   };
-
-  if (type === SynthTypes.SAMPLER) {
-    return {
-      active: false,
-      slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
-        acc[slotId] = false;
-        return acc;
-      }, {}),
-    };
-  }
 
   return {
     active: false,
@@ -239,10 +202,6 @@ function createInstrument(type, options = {}) {
     creatorUserId: normalizedCreatorUserId,
     creatorDisplayName: normalizedCreatorDisplayName || null,
   };
-
-  if (type === SynthTypes.SAMPLER) {
-    ensureSamplerParamStructure(instrument);
-  }
 
   return instrument;
 }
@@ -297,62 +256,7 @@ function createStepSequence(type, length) {
   return Array.from({ length: targetLength }, () => createStepTemplate(type));
 }
 
-// Sample audio (up to ~6.7 MB of base64 per slot) is only sent when a client
-// needs it: on joining a room and when that slot's sample changes. Every
-// other update carries the sample's metadata with `dataOmitted: true`, and
-// the client keeps the audio it already has. Re-sending all six slots on each
-// step toggle or slider move ran the server out of memory.
-const ALL_SAMPLE_DATA = 'all';
-const NO_SAMPLE_DATA = new Set();
-
-function omitSampleData(sample) {
-  const { data, ...meta } = sample;
-  return { ...meta, dataOmitted: true };
-}
-
-// One string per slot that changes whenever the slot's sample does.
-function samplerSampleSignatures(instrument) {
-  const slots = instrument?.params?.slots || {};
-  return Object.fromEntries(SAMPLER_SLOT_IDS.map((slotId) => {
-    const sample = slots[slotId]?.sample;
-    return [slotId, sample ? `${sample.updatedAt}:${sample.bytesLength}:${sample.data?.length}` : 'none'];
-  }));
-}
-
-function changedSampleSlots(before, instrument) {
-  const after = samplerSampleSignatures(instrument);
-  return new Set(SAMPLER_SLOT_IDS.filter((slotId) => before[slotId] !== after[slotId]));
-}
-
-// sampleData: ALL_SAMPLE_DATA, or a Set of the slot ids whose audio to include.
-function deepCloneSamplerParams(params = {}, sampleData = ALL_SAMPLE_DATA) {
-  const clone = { slots: {} };
-  for (const slotId of SAMPLER_SLOT_IDS) {
-    const source = params?.slots?.[slotId];
-    const keepData = sampleData === ALL_SAMPLE_DATA || (sampleData instanceof Set && sampleData.has(slotId));
-    if (source && typeof source === 'object') {
-      clone.slots[slotId] = {
-        id: slotId,
-        name: typeof source.name === 'string' ? source.name : `Slot ${slotId}`,
-        volume: typeof source.volume === 'number' ? source.volume : 1,
-        pan: typeof source.pan === 'number' ? source.pan : 0,
-        pitch: typeof source.pitch === 'number' ? source.pitch : 0,
-        startOffset: typeof source.startOffset === 'number' ? source.startOffset : 0,
-        endOffset: typeof source.endOffset === 'number' ? source.endOffset : 1,
-        reverse: Boolean(source.reverse),
-        mute: Boolean(source.mute),
-        sample: source.sample && typeof source.sample === 'object'
-          ? (keepData ? { ...source.sample } : omitSampleData(source.sample))
-          : null,
-      };
-    } else {
-      clone.slots[slotId] = createDefaultSamplerSlot(slotId);
-    }
-  }
-  return clone;
-}
-
-function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
+function cloneInstrument(instrument) {
   if (instrument.type === SynthTypes.DRUMS) {
     instrument.params = drumKit.normalizeDrumParams(instrument.params);
   }
@@ -367,9 +271,6 @@ function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
   }
   if (instrument.type === SynthTypes.FX) {
     instrument.params = fxKit.normalizeFxParams(instrument.params);
-  }
-  if (instrument.type === SynthTypes.SAMPLER) {
-    ensureSamplerParamStructure(instrument);
   }
   if (
     instrument.params
@@ -410,7 +311,6 @@ function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
       const clonedStep = {
         ...step,
         layers: step.layers ? { ...step.layers } : undefined,
-        slots: step.slots ? { ...step.slots } : undefined,
       };
 
       if (instrument.type === SynthTypes.DRUMS) {
@@ -421,15 +321,6 @@ function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
       if (instrument.type === SynthTypes.FX) {
         ensureFxLayers(clonedStep);
         clonedStep.active = Object.values(clonedStep.layers).some(Boolean);
-      }
-
-      if (instrument.type === SynthTypes.SAMPLER) {
-        const normalizedSlots = {};
-        for (const slotId of SAMPLER_SLOT_IDS) {
-          normalizedSlots[slotId] = Boolean(clonedStep.slots && clonedStep.slots[slotId]);
-        }
-        clonedStep.slots = normalizedSlots;
-        clonedStep.active = Object.values(normalizedSlots).some(Boolean);
       }
 
       return clonedStep;
@@ -446,8 +337,6 @@ function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
     base.params = hooverKit.normalizeHooverParams(instrument.params);
   } else if (instrument.type === SynthTypes.FX) {
     base.params = fxKit.normalizeFxParams(instrument.params);
-  } else if (instrument.type === SynthTypes.SAMPLER) {
-    base.params = deepCloneSamplerParams(instrument.params, sampleData);
   } else {
     base.params = { ...instrument.params };
     if (
@@ -528,11 +417,6 @@ function ensureInstrumentStepCapacity(instrument, stepCount) {
   }
 
   if (currentLength >= targetLength) {
-    if (instrument.type === SynthTypes.SAMPLER) {
-      for (let index = 0; index < instrument.steps.length; index += 1) {
-        ensureSamplerStepSlots(instrument.steps[index]);
-      }
-    }
     return false;
   }
 
@@ -540,11 +424,6 @@ function ensureInstrumentStepCapacity(instrument, stepCount) {
   for (let index = currentLength; index < targetLength; index += 1) {
     instrument.steps.push(createStepTemplate(instrument.type));
     mutated = true;
-  }
-  if (instrument.type === SynthTypes.SAMPLER) {
-    for (let index = 0; index < instrument.steps.length; index += 1) {
-      ensureSamplerStepSlots(instrument.steps[index]);
-    }
   }
   return mutated;
 }
@@ -617,14 +496,6 @@ function applyInstrumentParams(instrument, params = {}) {
     return;
   }
 
-  if (instrument.type === SynthTypes.SAMPLER) {
-    const changed = applySamplerParamUpdates(instrument, params);
-    if (changed) {
-      ensureSamplerParamStructure(instrument);
-    }
-    return;
-  }
-
   if (!params || typeof params !== 'object') {
     return;
   }
@@ -669,226 +540,6 @@ function ensureDrumLayers(step) {
   return layers;
 }
 
-function ensureSamplerStepSlots(step) {
-  step.slots = step.slots || {};
-  let hasActive = false;
-  for (const slotId of SAMPLER_SLOT_IDS) {
-    if (typeof step.slots[slotId] !== 'boolean') {
-      step.slots[slotId] = false;
-    }
-    if (step.slots[slotId]) {
-      hasActive = true;
-    }
-  }
-  if (typeof step.active !== 'boolean' || step.active !== hasActive) {
-    step.active = hasActive;
-  }
-  return step.slots;
-}
-
-function ensureSamplerParamStructure(instrument) {
-  if (instrument.type !== SynthTypes.SAMPLER) {
-    return;
-  }
-  const nextParams = { slots: {} };
-  const currentSlots = instrument.params && typeof instrument.params === 'object' ? instrument.params.slots || {} : {};
-  for (const slotId of SAMPLER_SLOT_IDS) {
-    const base = createDefaultSamplerSlot(slotId);
-    const existing = currentSlots[slotId];
-    nextParams.slots[slotId] = mergeSamplerSlot(base, existing, { allowExistingSample: true });
-  }
-  instrument.params = nextParams;
-}
-
-function applySamplerParamUpdates(instrument, updates = {}) {
-  if (instrument.type !== SynthTypes.SAMPLER) {
-    return false;
-  }
-  if (!updates || typeof updates !== 'object') {
-    return false;
-  }
-
-  ensureSamplerParamStructure(instrument);
-  const params = instrument.params;
-  let changed = false;
-
-  if (updates.slots && typeof updates.slots === 'object') {
-    for (const [rawSlotId, slotPayload] of Object.entries(updates.slots)) {
-      const slotId = normalizeSamplerSlotId(rawSlotId);
-      if (!slotId) {
-        continue;
-      }
-      const currentSlot = params.slots[slotId];
-      const nextSlot = mergeSamplerSlot(currentSlot, slotPayload || {});
-      if (!samplerSlotsEqual(currentSlot, nextSlot)) {
-        params.slots[slotId] = nextSlot;
-        changed = true;
-      }
-    }
-  }
-
-  return changed;
-}
-
-function normalizeSamplerSlotId(slotId) {
-  if (typeof slotId !== 'string') {
-    return null;
-  }
-  const normalized = slotId.trim().toUpperCase();
-  return SAMPLER_SLOT_IDS.includes(normalized) ? normalized : null;
-}
-
-function mergeSamplerSlot(base, overrides = {}, options = {}) {
-  const slot = {
-    ...base,
-    sample: base.sample ? { ...base.sample } : null,
-  };
-
-  if (!overrides || typeof overrides !== 'object') {
-    return finalizeSamplerSlot(slot);
-  }
-
-  if (typeof overrides.name === 'string' && overrides.name.trim()) {
-    slot.name = overrides.name.trim().slice(0, 64);
-  }
-
-  if (typeof overrides.volume === 'number' && Number.isFinite(overrides.volume)) {
-    slot.volume = clamp(overrides.volume, 0, 1);
-  }
-
-  if (typeof overrides.pan === 'number' && Number.isFinite(overrides.pan)) {
-    slot.pan = clamp(overrides.pan, -1, 1);
-  }
-
-  if (typeof overrides.pitch === 'number' && Number.isFinite(overrides.pitch)) {
-    slot.pitch = clamp(overrides.pitch, -24, 24);
-  }
-
-  if (typeof overrides.startOffset === 'number' && Number.isFinite(overrides.startOffset)) {
-    slot.startOffset = clamp(overrides.startOffset, 0, 0.99);
-  }
-
-  if (typeof overrides.endOffset === 'number' && Number.isFinite(overrides.endOffset)) {
-    slot.endOffset = clamp(overrides.endOffset, 0.01, 1);
-  }
-
-  if (typeof overrides.reverse === 'boolean') {
-    slot.reverse = overrides.reverse;
-  }
-
-  if (typeof overrides.mute === 'boolean') {
-    slot.mute = overrides.mute;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(overrides, 'sample')) {
-    if (overrides.sample === null) {
-      slot.sample = null;
-    } else if (overrides.sample && typeof overrides.sample === 'object') {
-      const sanitized = sanitizeSampleDescriptor(overrides.sample, { allowExisting: options.allowExistingSample === true });
-      if (sanitized) {
-        slot.sample = sanitized;
-      }
-    }
-  }
-
-  return finalizeSamplerSlot(slot);
-}
-
-function finalizeSamplerSlot(slot) {
-  const normalizedStart = clamp(Number(slot.startOffset) || 0, 0, 0.99);
-  let normalizedEnd = clamp(Number(slot.endOffset) || 1, 0.01, 1);
-  if (normalizedEnd <= normalizedStart) {
-    normalizedEnd = clamp(normalizedStart + 0.05, 0.06, 1);
-  }
-  slot.startOffset = clamp(normalizedStart, 0, Math.max(0, normalizedEnd - 0.01));
-  slot.endOffset = clamp(normalizedEnd, slot.startOffset + 0.01, 1);
-  slot.volume = clamp(Number(slot.volume) || 0, 0, 1);
-  slot.pan = clamp(Number(slot.pan) || 0, -1, 1);
-  slot.pitch = clamp(Number(slot.pitch) || 0, -24, 24);
-  slot.reverse = Boolean(slot.reverse);
-  slot.mute = Boolean(slot.mute);
-  slot.id = slot.id || createDefaultSamplerSlot('A').id;
-  return slot;
-}
-
-function sanitizeSampleDescriptor(descriptor, { allowExisting = false } = {}) {
-  if (!descriptor || typeof descriptor !== 'object') {
-    return null;
-  }
-
-  if (descriptor.clear === true) {
-    return null;
-  }
-
-  const data = typeof descriptor.data === 'string' ? descriptor.data : null;
-  if (!data || !data.length) {
-    return null;
-  }
-
-  let bytesLength = Number(descriptor.bytesLength);
-  if (!allowExisting || !Number.isFinite(bytesLength) || bytesLength <= 0) {
-    try {
-      const buffer = Buffer.from(data, 'base64');
-      bytesLength = buffer.length;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  if (!Number.isFinite(bytesLength) || bytesLength <= 0 || bytesLength > SAMPLER_MAX_SAMPLE_BYTES) {
-    return null;
-  }
-
-  const name = typeof descriptor.name === 'string' && descriptor.name.trim() ? descriptor.name.trim().slice(0, 120) : 'Sample';
-  const mimeType = typeof descriptor.mimeType === 'string' && descriptor.mimeType.trim() ? descriptor.mimeType.trim().slice(0, 64) : 'audio/wav';
-  const updatedAt = Number.isFinite(descriptor.updatedAt) ? descriptor.updatedAt : Date.now();
-
-  return {
-    name,
-    mimeType,
-    data,
-    bytesLength,
-    updatedAt,
-  };
-}
-
-function samplerSlotsEqual(a, b) {
-  if (a === b) {
-    return true;
-  }
-  if (!a || !b) {
-    return false;
-  }
-  if (
-    a.name !== b.name
-    || a.volume !== b.volume
-    || a.pan !== b.pan
-    || a.pitch !== b.pitch
-    || a.startOffset !== b.startOffset
-    || a.endOffset !== b.endOffset
-    || a.reverse !== b.reverse
-    || a.mute !== b.mute
-  ) {
-    return false;
-  }
-
-  const sampleA = a.sample;
-  const sampleB = b.sample;
-  if (!sampleA && !sampleB) {
-    return true;
-  }
-  if (!sampleA || !sampleB) {
-    return false;
-  }
-  return (
-    sampleA.name === sampleB.name
-    && sampleA.mimeType === sampleB.mimeType
-    && sampleA.data === sampleB.data
-    && sampleA.bytesLength === sampleB.bytesLength
-    && sampleA.updatedAt === sampleB.updatedAt
-  );
-}
-
 function applyStepChanges(step, changes = {}) {
   if (typeof changes.active === 'boolean') {
     step.active = changes.active;
@@ -902,24 +553,6 @@ function applyStepChanges(step, changes = {}) {
       }
     }
     step.active = Object.values(step.layers).some(Boolean);
-  }
-
-  if (changes.slots && typeof changes.slots === 'object') {
-    const slots = ensureSamplerStepSlots(step);
-    let mutated = false;
-    for (const [slotId, flag] of Object.entries(changes.slots)) {
-      const normalized = normalizeSamplerSlotId(slotId);
-      if (!normalized || typeof flag !== 'boolean') {
-        continue;
-      }
-      if (slots[normalized] !== flag) {
-        slots[normalized] = flag;
-        mutated = true;
-      }
-    }
-    if (mutated) {
-      step.active = Object.values(slots).some(Boolean);
-    }
   }
 
   if (typeof changes.pitch === 'string') {
@@ -974,9 +607,7 @@ function broadcastTransportState(roomId) {
   io.to(roomId).emit('tempo:update', room.transport.bpm);
 }
 
-// Updates leave sample audio out unless sampleSlots names the slots whose
-// sample just changed (see deepCloneSamplerParams).
-function broadcastInstrumentState(roomId, instrumentId, { sampleSlots = NO_SAMPLE_DATA } = {}) {
+function broadcastInstrumentState(roomId, instrumentId) {
   const room = rooms.get(roomId);
   if (!room) {
     return;
@@ -987,7 +618,7 @@ function broadcastInstrumentState(roomId, instrumentId, { sampleSlots = NO_SAMPL
     return;
   }
 
-  io.to(roomId).emit('instrument:update', cloneInstrument(instrument, { sampleData: sampleSlots }));
+  io.to(roomId).emit('instrument:update', cloneInstrument(instrument));
 }
 
 function broadcastInstrumentRemoval(roomId, instrumentId) {
@@ -1047,10 +678,10 @@ app.get('/r/:slug', (_req, res) => {
 
 const server = http.createServer(app);
 
-// A sampler upload carries the file as base64 (4/3 of the raw size) plus a
-// small JSON envelope; Socket.IO's default 1 MB limit would drop the
-// connection for any sample above ~750 KB.
-const SOCKET_MAX_MESSAGE_BYTES = Math.ceil(SAMPLER_MAX_SAMPLE_BYTES / 3) * 4 + 64 * 1024;
+// Every client message is a small JSON command (a step, a parameter, an LFO
+// with at most 32 targets), so anything near this size is not legitimate;
+// a low cap keeps one client from making the server buffer large payloads.
+const SOCKET_MAX_MESSAGE_BYTES = 100 * 1024;
 const io = new Server(server, { maxHttpBufferSize: SOCKET_MAX_MESSAGE_BYTES });
 
 // Rate limiters: points = max calls, duration = time window in seconds
@@ -1393,11 +1024,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Only a slot whose sample was uploaded or replaced goes out with audio.
-    const samplesBefore = instrument.type === SynthTypes.SAMPLER ? samplerSampleSignatures(instrument) : null;
     applyInstrumentParams(instrument, params);
-    const sampleSlots = samplesBefore ? changedSampleSlots(samplesBefore, instrument) : NO_SAMPLE_DATA;
-    broadcastInstrumentState(room.id, instrumentId, { sampleSlots });
+    broadcastInstrumentState(room.id, instrumentId);
   });
 
   on('instrument:mute', async ({ instrumentId, muted } = {}) => {
@@ -1445,7 +1073,7 @@ io.on('connection', (socket) => {
     respond({ ok: true, name: sanitizedName });
   });
 
-  on('instrument:step', async ({ instrumentId, stepIndex, step, drum, value, slot } = {}) => {
+  on('instrument:step', async ({ instrumentId, stepIndex, step, drum, value } = {}) => {
     if (!await checkRateLimit(rateLimiters.instrumentStep, socket.id, socket)) return;
     const room = getRoomForSocket(socket);
     if (!room) {
@@ -1501,19 +1129,6 @@ io.on('connection', (socket) => {
       }
       layers[lane] = typeof value === 'boolean' ? value : !layers[lane];
       targetStep.active = Object.values(layers).some(Boolean);
-      broadcastInstrumentState(room.id, instrumentId);
-      return;
-    }
-
-    if (instrument.type === SynthTypes.SAMPLER) {
-      const slotId = normalizeSamplerSlotId(slot || drum);
-      if (!slotId) {
-        return;
-      }
-      const slots = ensureSamplerStepSlots(targetStep);
-      const nextValue = typeof value === 'boolean' ? value : !slots[slotId];
-      slots[slotId] = nextValue;
-      targetStep.active = Object.values(slots).some(Boolean);
       broadcastInstrumentState(room.id, instrumentId);
       return;
     }

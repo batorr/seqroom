@@ -824,8 +824,7 @@
       .slur.open-end { border-right: 0; border-bottom-right-radius: 0; }
       .slur.inert { border-color: var(--rule-beat); border-style: dashed; border-top: 0; }
 
-      .drum-step-toggle,
-      .sampler-step-toggle {
+      .drum-step-toggle {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -836,21 +835,17 @@
         background: transparent;
       }
 
-      .drum-indicator,
-      .sampler-indicator {
+      .drum-indicator {
         width: 12px;
         height: 12px;
         border-radius: 50%;
       }
 
-      .drum-step-toggle:hover:not(:disabled) .drum-indicator:not(.active),
-      .sampler-step-toggle:hover:not(:disabled) .sampler-indicator:not(.active) { box-shadow: inset 0 0 0 1.5px var(--faint); }
+      .drum-step-toggle:hover:not(:disabled) .drum-indicator:not(.active) { box-shadow: inset 0 0 0 1.5px var(--faint); }
 
-      .drum-indicator.active,
-      .sampler-indicator.active { background: var(--ink); }
+      .drum-indicator.active { background: var(--ink); }
 
-      .step-cell.playing .drum-indicator.active,
-      .step-cell.playing .sampler-indicator.active { background: var(--accent); }
+      .step-cell.playing .drum-indicator.active { background: var(--accent); }
 
       .step-grid.locked button:not(.lane-label) { cursor: not-allowed; }
 
@@ -987,59 +982,6 @@
         outline: 1px dashed var(--accent);
         outline-offset: 6px;
       }
-
-      .sampler-params-header { grid-column: 1 / -1; font-size: 15px; font-weight: 600; }
-      .sampler-sample-status { grid-column: 1 / -1; margin-top: -14px; color: var(--muted); font-size: 13px; }
-      .sampler-toggle-control { align-self: end; }
-      .sampler-toggle-label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-      .sampler-toggle-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
-
-      /* Sampler slot strip (inspector) */
-      .drum-selector {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        border-top: 1px solid var(--rule);
-        border-left: 1px solid var(--rule);
-      }
-
-      .sampler-slot {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        grid-template-areas: "letter info" "actions actions";
-        gap: 4px 10px;
-        padding: 10px 12px;
-        border-right: 1px solid var(--rule);
-        border-bottom: 1px solid var(--rule);
-      }
-
-      .sampler-slot.active { box-shadow: inset 0 3px 0 var(--accent); }
-      .sampler-slot.drag-over { background: var(--accent-tint); outline: 1.5px dashed var(--accent); outline-offset: -4px; }
-
-      .sampler-slot-button {
-        grid-area: letter;
-        width: 28px;
-        height: 28px;
-        padding: 0;
-        border: 1px solid var(--ink);
-        background: transparent;
-        font-weight: 700;
-      }
-
-      .sampler-slot.active .sampler-slot-button { background: var(--ink); color: #ffffff; }
-
-      .sampler-slot-info {
-        grid-area: info;
-        align-self: center;
-        overflow: hidden;
-        font-size: 12px;
-        color: var(--muted);
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .sampler-slot-actions { grid-area: actions; display: flex; gap: 2px; margin-left: -10px; }
-      .sampler-slot-actions .subtle { height: 28px; font-size: 13px; }
-      .sampler-slot-file-input { display: none; }
 
       /* LFO cards */
       .lfo-list { display: flex; flex-direction: column; }
@@ -1619,10 +1561,6 @@
             <button class="synth-option" type="button" data-synth-type="poly-synth">
               <h4>Poly Synth</h4>
               <span>Polyphonic synth with filter and envelope.</span>
-            </button>
-            <button class="synth-option" type="button" data-synth-type="sampler">
-              <h4>Sampler</h4>
-              <span>Six slots for your own WAV or MP3 files.</span>
             </button>
           </div>
         </div>

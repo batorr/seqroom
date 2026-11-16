@@ -3,7 +3,7 @@
 
 import { DEFAULT_BPM } from '../constants/audio.js';
 import { STEP_COUNT } from '../constants/ui.js';
-import { SynthTypes, DRUM_VOICES, FX_VOICES, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
+import { SynthTypes, DRUM_VOICES, FX_VOICES, INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
     clampStepCount,
     clampTempo,
@@ -11,8 +11,6 @@ import {
     createEmptyMelodicStep,
     createEmptyDrumStep,
     createEmptyFxStep,
-    createEmptySamplerStep,
-    createDefaultSamplerSlot
 } from '../utils/helpers.js';
 import { normalizeTransport } from '../shared/timeline.js';
 
@@ -209,9 +207,6 @@ export function normalizeInstrument(instrument) {
                 active: FX_VOICES.some((lane) => layers[lane.id]),
             };
         }
-        if (instrument.type === SynthTypes.SAMPLER) {
-            return normalizeSamplerStep(step);
-        }
         return {
             ...step,
         };
@@ -222,15 +217,11 @@ export function normalizeInstrument(instrument) {
             ? createEmptyDrumStep()
             : instrument.type === SynthTypes.FX
                 ? createEmptyFxStep()
-                : instrument.type === SynthTypes.SAMPLER
-                    ? createEmptySamplerStep()
-                    : createEmptyMelodicStep();
+                : createEmptyMelodicStep();
         normalizedSteps.push({ ...template });
     }
 
-    const normalizedParams = instrument.type === SynthTypes.SAMPLER
-        ? normalizeSamplerParams(instrument.params)
-        : normalizeSynthParams(instrument.params);
+    const normalizedParams = normalizeSynthParams(instrument.params);
 
     const normalizedName = sanitizeInstrumentName(instrument.name, instrument.type);
 
@@ -267,88 +258,6 @@ export function setInstrumentLockedBy(instrumentId, lockedBy) {
     instrument.lockedBy = normalized;
 }
 
-// Normalize sampler-specific data
-export function normalizeSamplerParams(params = {}) {
-    const slots = {};
-    SAMPLER_SLOT_IDS.forEach((slotId) => {
-        const defaults = createDefaultSamplerSlot(slotId);
-        const source = params?.slots?.[slotId] || params[slotId] || {};
-        const normalized = {
-            id: slotId,
-            name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 64) : defaults.name,
-            volume: clampValue(source.volume ?? defaults.volume, 0, 1),
-            pan: clampValue(source.pan ?? defaults.pan, -1, 1),
-            pitch: clampValue(source.pitch ?? defaults.pitch, -24, 24),
-            startOffset: clampValue(source.startOffset ?? defaults.startOffset, 0, 0.99),
-            endOffset: clampValue(source.endOffset ?? defaults.endOffset, 0.01, 1),
-            reverse: Boolean(source.reverse),
-            mute: Boolean(source.mute),
-            sample: normalizeSamplerSample(source.sample),
-        };
-        if (normalized.endOffset <= normalized.startOffset) {
-            normalized.endOffset = Math.min(1, normalized.startOffset + 0.05);
-        }
-        normalized.startOffset = clampValue(normalized.startOffset, 0, Math.max(0, normalized.endOffset - 0.01));
-        normalized.endOffset = clampValue(normalized.endOffset, normalized.startOffset + 0.01, 1);
-        slots[slotId] = normalized;
-    });
-    return { slots };
-}
-
-// The server leaves a sample's audio out of updates that do not change it
-// (`dataOmitted`); put back the copy this client already holds for the same
-// sample, before normalizing (which would drop a sample without audio).
-export function restoreOmittedSampleData(incoming, previous) {
-    if (!incoming || incoming.type !== SynthTypes.SAMPLER) {
-        return incoming;
-    }
-    const slots = incoming.params?.slots;
-    if (!slots || typeof slots !== 'object') {
-        return incoming;
-    }
-    SAMPLER_SLOT_IDS.forEach((slotId) => {
-        const sample = slots[slotId]?.sample;
-        if (!sample || !sample.dataOmitted) {
-            return;
-        }
-        const known = previous?.params?.slots?.[slotId]?.sample;
-        if (known && typeof known.data === 'string' && known.updatedAt === sample.updatedAt) {
-            sample.data = known.data;
-        }
-        delete sample.dataOmitted;
-    });
-    return incoming;
-}
-
-export function normalizeSamplerSample(sample) {
-    if (!sample || typeof sample !== 'object') {
-        return null;
-    }
-    if (typeof sample.data !== 'string' || !sample.data.length) {
-        return null;
-    }
-    const normalized = {
-        name: typeof sample.name === 'string' && sample.name.trim() ? sample.name.trim().slice(0, 120) : 'Sample',
-        mimeType: typeof sample.mimeType === 'string' && sample.mimeType.trim() ? sample.mimeType.trim().slice(0, 64) : 'audio/wav',
-        data: sample.data,
-        bytesLength: Number.isFinite(sample.bytesLength) ? Number(sample.bytesLength) : undefined,
-        updatedAt: Number.isFinite(sample.updatedAt) ? Number(sample.updatedAt) : Date.now(),
-    };
-    return normalized;
-}
-
-export function normalizeSamplerStep(step) {
-    const base = createEmptySamplerStep();
-    const slots = { ...base.slots, ...(step?.slots || {}) };
-    const normalized = {
-        ...base,
-        ...step,
-        slots,
-    };
-    normalized.active = Object.values(slots).some(Boolean);
-    return normalized;
-}
-
 // Helper functions for instrument capacity
 export function ensureLocalInstrumentCapacity(instrument, stepCount) {
     if (!instrument) {
@@ -364,8 +273,6 @@ export function ensureLocalInstrumentCapacity(instrument, stepCount) {
             template = createEmptyDrumStep();
         } else if (instrument.type === SynthTypes.FX) {
             template = createEmptyFxStep();
-        } else if (instrument.type === SynthTypes.SAMPLER) {
-            template = createEmptySamplerStep();
         } else {
             template = createEmptyMelodicStep();
         }

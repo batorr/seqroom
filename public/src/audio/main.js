@@ -4,7 +4,6 @@
 import { state } from '../state/main.js';
 import { audioState, socketState } from '../state/audio.js';
 import { LATENCY_SMOOTHING } from '../constants/audio.js';
-import { SynthTypes } from '../constants/instruments.js';
 import { createOffsetEstimator, createRollingMedian } from '../shared/clock-sync.js';
 import { createAudioGraph } from './graph.js';
 
@@ -110,15 +109,6 @@ export function ensureAudioContext() {
         audioState.context = ctx;
         audioState.masterGain = graph.input;
         audioState.masterOutput = graph.output;
-
-        // Prepare sampler audio for all existing sampler instruments
-        state.instruments.forEach((instrument) => {
-            if (instrument.type === SynthTypes.SAMPLER) {
-                import('./instruments/sampler.js').then(({ prepareSamplerAudio }) => {
-                    prepareSamplerAudio(instrument);
-                }).catch(console.error);
-            }
-        });
 
         return ctx;
     } catch (error) {

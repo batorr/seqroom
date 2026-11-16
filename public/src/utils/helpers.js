@@ -2,7 +2,6 @@
 
 import { TEMPO_MIN, TEMPO_MAX, DEFAULT_BPM, NOTE_OPTIONS } from '../constants/audio.js';
 import { STEP_COUNT, STEP_COUNT_MIN, STEP_COUNT_MAX } from '../constants/ui.js';
-import { SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG } from '../constants/instruments.js';
 import { createDrumLayers } from '../shared/drum-kit.js';
 import { createFxLayers } from '../shared/fx.js';
 
@@ -140,33 +139,6 @@ export function createEmptyFxStep() {
     return {
         layers: createFxLayers(),
         active: false,
-    };
-}
-
-export function createEmptySamplerStep() {
-    return {
-        slots: SAMPLER_SLOT_IDS.reduce((acc, slotId) => {
-            acc[slotId] = false;
-            return acc;
-        }, {}),
-        active: false,
-    };
-}
-
-// Sampler slot factory
-export function createDefaultSamplerSlot(slotId) {
-    const slotMeta = SAMPLER_SLOT_CONFIG.find((slot) => slot.id === slotId);
-    return {
-        id: slotId,
-        name: slotMeta ? slotMeta.label : `Slot ${slotId}`,
-        volume: 1,
-        pan: 0,
-        pitch: 0,
-        startOffset: 0,
-        endOffset: 1,
-        reverse: false,
-        mute: false,
-        sample: null,
     };
 }
 

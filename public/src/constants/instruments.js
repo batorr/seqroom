@@ -12,7 +12,6 @@ export const SynthTypes = Object.freeze({
     TB303: 'tb-303',
     DRUMS: 'drum-kit',
     POLY: 'poly-synth',
-    SAMPLER: 'sampler',
     RUMBLE: 'rumble',
     STAB: 'rave-stab',
     HOOVER: 'hoover',
@@ -22,20 +21,6 @@ export const SynthTypes = Object.freeze({
 // Rave Kit voices and FX lanes (shared with the server).
 export { DRUM_VOICES } from '../shared/drum-kit.js';
 export { FX_VOICES } from '../shared/fx.js';
-
-// Sampler slot configuration
-export const SAMPLER_SLOT_CONFIG = [
-    { id: 'A', label: 'Slot A', color: '#f97316' },
-    { id: 'B', label: 'Slot B', color: '#facc15' },
-    { id: 'C', label: 'Slot C', color: '#38bdf8' },
-    { id: 'D', label: 'Slot D', color: '#22c55e' },
-    { id: 'E', label: 'Slot E', color: '#a855f7' },
-    { id: 'F', label: 'Slot F', color: '#f472b6' },
-];
-
-export const SAMPLER_SLOT_IDS = SAMPLER_SLOT_CONFIG.map((slot) => slot.id);
-export const SAMPLER_MAX_SAMPLE_BYTES = 5 * 1024 * 1024;
-export const SAMPLER_ALLOWED_MIME_TYPES = ['audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3'];
 
 // Rave Kit parameter sliders: the whole kit, then one set per voice.
 const drumSlider = (key) => sliderParam(key, DRUM_PARAMS[key].label, DRUM_PARAMS[key].min, DRUM_PARAMS[key].max, 0.01);
@@ -114,12 +99,6 @@ function createInstrumentLibrary(sliderParam, selectParam) {
                     { value: 'square', label: 'Square' },
                 ]),
             ],
-        },
-        [SynthTypes.SAMPLER]: {
-            label: 'Sampler',
-            typeLabel: 'Sampler',
-            toneClass: 'tone-sampler',
-            params: [],
         },
         [SynthTypes.RUMBLE]: {
             label: 'Rumble',

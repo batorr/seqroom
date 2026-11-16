@@ -6,7 +6,6 @@ import {
     hydrateState,
     normalizeServerTransport,
     normalizeInstrument,
-    restoreOmittedSampleData,
     setInstrumentLockedBy,
     getDisplayNameOrDefault,
     setDisplayName,
@@ -30,7 +29,6 @@ import { renderInstrument, removeInstrumentCard, renderEmptyState, setActiveInst
 import { updateTempoDisplay } from '../ui/tempo-controls.js';
 import { syncAudioScheduler, stopAudioScheduler } from '../audio/scheduler.js';
 import { ensureAudioContext, applyClockCorrection, getClientAbsoluteTime } from '../audio/main.js';
-import { prepareSamplerAudio, cleanupSamplerBuffers } from '../audio/instruments/sampler.js';
 import { hydrateServerLFOs, syncLFOClock } from '../audio/lfo.js';
 import { renderLFOCards, refreshParamIndicators } from '../ui/lfo-card.js';
 import { computeClockSample } from '../shared/clock-sync.js';
@@ -200,7 +198,6 @@ export function setupSocketEvents() {
             }
         }
         socketState.pendingDefaultInstrumentLabel = null;
-        state.instruments.forEach((instrument) => prepareSamplerAudio(instrument));
         hydrateServerLFOs(payload.lfos || []);
         renderTransport();
         renderInstruments();
@@ -231,7 +228,6 @@ export function setupSocketEvents() {
         }
         socketState.pendingInstrumentCreatorLabels.delete(normalized.id);
         state.instruments.set(normalized.id, normalized);
-        prepareSamplerAudio(normalized);
         if (!state.instrumentOrder.includes(normalized.id)) {
             state.instrumentOrder.push(normalized.id);
         }
@@ -240,10 +236,8 @@ export function setupSocketEvents() {
     });
 
     socket.on('instrument:update', (instrument) => {
-        restoreOmittedSampleData(instrument, state.instruments.get(instrument?.id));
         const normalized = normalizeInstrument(instrument);
         state.instruments.set(normalized.id, normalized);
-        prepareSamplerAudio(normalized);
         const suppressionExpiry = socketState.suppressedInstrumentUpdates.get(normalized.id);
         if (suppressionExpiry && suppressionExpiry > Date.now()) {
             return;
@@ -255,7 +249,6 @@ export function setupSocketEvents() {
     });
 
     socket.on('instrument:removed', ({ instrumentId }) => {
-        cleanupSamplerBuffers(instrumentId);
         state.instruments.delete(instrumentId);
         state.instrumentOrder = state.instrumentOrder.filter((id) => id !== instrumentId);
         const wasActive = state.activeInstrumentId === instrumentId;
