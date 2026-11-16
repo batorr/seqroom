@@ -56,3 +56,18 @@ export function initialize() {
 
 // Auto-initialize when module loads
 initialize();
+
+// ?debug=1 shows a live diagnostics readout (see ui/debug-overlay.js); it
+// sticks across reloads and room changes until ?debug=0.
+const debugParam = new URLSearchParams(window.location.search).get('debug');
+let debugEnabled = debugParam === '1';
+try {
+    if (debugParam === '1') window.localStorage.setItem('seqroom-debug', '1');
+    if (debugParam === '0') window.localStorage.removeItem('seqroom-debug');
+    debugEnabled = debugEnabled || window.localStorage.getItem('seqroom-debug') === '1';
+} catch {
+    // Storage blocked: the flag only lasts for this load.
+}
+if (debugEnabled) {
+    import('./ui/debug-overlay.js').then(({ showDebugOverlay }) => showDebugOverlay()).catch(console.error);
+}

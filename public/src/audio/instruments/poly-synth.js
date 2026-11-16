@@ -4,7 +4,7 @@
 import { clampValue } from '../../utils/helpers.js';
 import { noteToFrequency } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { routeVoice } from '../graph.js';
+import { routeVoice, releaseWhenEnded } from '../graph.js';
 
 export function schedulePolySynth(instrument, step, when, ctx) {
     const params = instrument.params || {};
@@ -35,11 +35,12 @@ export function schedulePolySynth(instrument, step, when, ctx) {
 
     osc.connect(filter);
     filter.connect(gain);
-    routeVoice(ctx, gain, {
+    const wired = routeVoice(ctx, gain, {
         delay: clampValue(getModulatedParam(id, 'delay', params.delay ?? 0, 0, 1), 0, 1) * 0.8,
         reverb: clampValue(getModulatedParam(id, 'reverb', params.reverb ?? 0.2, 0, 1), 0, 1),
     });
 
+    releaseWhenEnded([osc], wired);
     osc.start(when);
     osc.stop(when + attack + decay + release + 0.1);
 }

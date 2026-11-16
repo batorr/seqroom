@@ -18,7 +18,7 @@
 import { DRUM_PARAMS } from '../../shared/drum-kit.js';
 import { createNoiseBuffer } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getAudioGraph, getDriveCurve } from '../graph.js';
+import { getAudioGraph, getDriveCurve, releaseWhenEnded } from '../graph.js';
 
 // Inharmonic partials of a metal plate (ratios of 205.3, 304.4, 369.6, 522.7,
 // 540 and 800 Hz): the basis of analogue hi-hats.
@@ -50,6 +50,7 @@ function readParam(instrument, key) {
 
 // Per-instrument bus: voices -> drive -> mix, plus a room send.
 function ensureKit(instrument, ctx, when) {
+    prepareMetalLoops(ctx.sampleRate);
     const graph = getAudioGraph(ctx);
     let kit = kits.get(instrument.id);
     if (!kit || kit.ctx !== ctx) {
@@ -154,24 +155,94 @@ function decayingGain(ctx, when, peak, tau) {
     return gain;
 }
 
+const isSource = (node) => typeof node?.stop === 'function' && 'onended' in node;
+
+// Connects the nodes in a row. A chain that starts with a sound source is a
+// voice ending on a shared node (the kit or a metal bus): it is unplugged
+// from there when the source ends (see releaseWhenEnded in graph.js).
 function chain(...nodes) {
     for (let i = 0; i < nodes.length - 1; i += 1) {
         nodes[i].connect(nodes[i + 1]);
     }
+    if (nodes.length > 1 && isSource(nodes[0])) {
+        releaseWhenEnded([nodes[0]], [nodes[nodes.length - 2]]);
+    }
     return nodes[nodes.length - 1];
 }
 
-function metal(ctx, when, duration, baseHz, ratios) {
+// The metal of hats, ride and crash: six square waves at inharmonic ratios.
+// Running six oscillators for every hit (a ride rings for seconds, so ten
+// can overlap) was most of the kit's CPU, too much for a phone. Each metal
+// is rendered once into a seamless loop and played back as one source; Tone
+// is the playback rate. The loop is rendered at the top Tone so playback
+// only ever slows down (no aliasing), and every partial is rounded to a whole
+// number of cycles per loop (under 0.25% off) so the loop point is clean.
+const METALS = {
+    hat: { ratios: HAT_RATIOS, baseHz: 205, maxFactor: 1.35 },
+    ride: { ratios: RIDE_RATIOS, baseHz: 330, maxFactor: 1.25 },
+    crash: { ratios: CRASH_RATIOS, baseHz: 460, maxFactor: 1.25 },
+};
+const METAL_LOOP_SECONDS = 2;
+const metalLoops = new Map(); // `${name}:${sampleRate}` -> AudioBuffer, or 'pending'
+
+function prepareMetalLoops(sampleRate) {
+    const Offline = typeof window !== 'undefined' && (window.OfflineAudioContext || window.webkitOfflineAudioContext);
+    if (!Offline) {
+        return;
+    }
+    Object.entries(METALS).forEach(([name, { ratios, baseHz, maxFactor }]) => {
+        const key = `${name}:${sampleRate}`;
+        if (metalLoops.has(key)) {
+            return;
+        }
+        metalLoops.set(key, 'pending');
+        try {
+            const offline = new Offline(1, Math.round(sampleRate * METAL_LOOP_SECONDS), sampleRate);
+            const sum = offline.createGain();
+            sum.gain.value = 1 / ratios.length;
+            sum.connect(offline.destination);
+            ratios.forEach((ratio) => {
+                const osc = offline.createOscillator();
+                osc.type = 'square';
+                osc.frequency.value = Math.round(baseHz * maxFactor * ratio * METAL_LOOP_SECONDS) / METAL_LOOP_SECONDS;
+                osc.connect(sum);
+                osc.start(0);
+            });
+            offline.startRendering()
+                .then((buffer) => metalLoops.set(key, buffer))
+                .catch(() => metalLoops.delete(key));
+        } catch {
+            metalLoops.delete(key);
+        }
+    });
+}
+
+// factor: the Tone's multiple of the metal's base pitch.
+function metal(ctx, when, duration, name, factor) {
+    const { ratios, baseHz, maxFactor } = METALS[name];
+    const loop = metalLoops.get(`${name}:${ctx.sampleRate}`);
+    if (loop && loop !== 'pending') {
+        const source = ctx.createBufferSource();
+        source.buffer = loop;
+        source.loop = true;
+        source.playbackRate.value = factor / maxFactor;
+        source.start(when);
+        source.stop(when + duration);
+        return source;
+    }
+    // The first moments of a new kit, before its loops are rendered.
     const sum = ctx.createGain();
     sum.gain.value = 1 / ratios.length;
-    ratios.forEach((ratio) => {
+    const oscillators = ratios.map((ratio) => {
         const osc = ctx.createOscillator();
         osc.type = 'square';
-        osc.frequency.value = baseHz * ratio;
+        osc.frequency.value = baseHz * factor * ratio;
         osc.connect(sum);
         osc.start(when);
         osc.stop(when + duration);
+        return osc;
     });
+    releaseWhenEnded(oscillators, [sum]);
     return sum;
 }
 
@@ -275,38 +346,79 @@ function playRim(ctx, kit, when, volume, p) {
     const out = filter(ctx, 'highpass', 300);
     out.connect(kit.input);
 
-    [[480, 'triangle', 0.7], [1720, 'sine', 0.45]].forEach(([hz, type, mix]) => {
+    const sources = [[480, 'triangle', 0.7], [1720, 'sine', 0.45]].map(([hz, type, mix]) => {
         const osc = ctx.createOscillator();
         osc.type = type;
         osc.frequency.value = hz * tune;
         osc.start(when);
         osc.stop(when + tau * 8);
         chain(osc, decayingGain(ctx, when, level * mix, tau), out);
+        return osc;
     });
-    chain(
-        noiseSource(ctx, when, 0.02),
-        filter(ctx, 'bandpass', 4000, 1.2),
-        decayingGain(ctx, when, level * 0.5, 0.002),
-        out,
-    );
+    const click = noiseSource(ctx, when, 0.02);
+    chain(click, filter(ctx, 'bandpass', 4000, 1.2), decayingGain(ctx, when, level * 0.5, 0.002), out);
+    releaseWhenEnded([...sources, click], [out]);
 }
 
-// Metal + air through the hat filters; returns the amp so it can be choked.
-function playHat(ctx, kit, when, level, tone, tau) {
-    const length = tau * 8 + 0.02;
-    const amp = ctx.createGain();
-    amp.gain.setValueAtTime(0, when);
-    amp.gain.linearRampToValueAtTime(level, when + 0.0008);
-    amp.gain.setTargetAtTime(0, when + 0.0008, tau);
-    amp.connect(kit.input);
+// One filter chain per metal voice and kit, shared by all its hits: the
+// filters are linear, so filtering the sum sounds like filtering each hit,
+// and a hit only adds its two sources and their envelopes. Per-hit filter
+// chains (four for every hat, three ringing for seconds behind every ride)
+// were most of what was left of the kit's CPU once the metal was a loop.
+//   metal -> envelope -> band-pass ─┐
+//   noise -> envelope -> high-pass -> level ─┴> bright high-pass (-> low-pass) -> kit
+const METAL_BUS = {
+    hat: { band: 10000, bandQ: 0.9, airHz: 8500, airLevel: 0.35, bright: 7000, lowpass: 15000 },
+    openhat: { band: 10000, bandQ: 0.9, airHz: 8500, airLevel: 0.35, bright: 7000, lowpass: 15000 },
+    ride: { band: 6500, bandQ: 1.6, airHz: 7500, airLevel: 0.35, bright: 4200 },
+    crash: { band: 7500, bandQ: 0.7, airHz: 6000, airLevel: 0.6, bright: 3500 },
+};
 
-    const bright = filter(ctx, 'highpass', 7000 + tone * 1500);
-    chain(bright, filter(ctx, 'lowpass', 15000), amp);
-    chain(metal(ctx, when, length, 205 * (0.85 + tone * 0.5), HAT_RATIOS), filter(ctx, 'bandpass', 10000, 0.9), bright);
-    const air = ctx.createGain();
-    air.gain.value = 0.35;
-    chain(noiseSource(ctx, when, length), filter(ctx, 'highpass', 8500), air, bright);
-    return amp;
+function metalBus(ctx, kit, voice) {
+    kit.metalBuses = kit.metalBuses || {};
+    let bus = kit.metalBuses[voice];
+    if (!bus) {
+        const spec = METAL_BUS[voice];
+        const metalIn = ctx.createGain();
+        const airIn = ctx.createGain();
+        const band = filter(ctx, 'bandpass', spec.band, spec.bandQ);
+        const airLevel = ctx.createGain();
+        airLevel.gain.value = spec.airLevel;
+        const bright = filter(ctx, 'highpass', spec.bright);
+        chain(metalIn, band, bright);
+        chain(airIn, filter(ctx, 'highpass', spec.airHz), airLevel, bright);
+        chain(bright, ...(spec.lowpass ? [filter(ctx, 'lowpass', spec.lowpass)] : []), kit.input);
+        bus = { metalIn, airIn, band, bright, bandHz: spec.band, brightHz: spec.bright };
+        kit.metalBuses[voice] = bus;
+    }
+    return bus;
+}
+
+// Follows the Tone without piling an automation event onto every hit.
+function setBusFilter(bus, key, hz, when) {
+    if (bus[`${key}Hz`] !== hz) {
+        bus[`${key}Hz`] = hz;
+        bus[key].frequency.setValueAtTime(hz, when);
+    }
+}
+
+// Metal + air into the hat's bus; returns the envelopes so they can be choked.
+function playHat(ctx, kit, when, level, tone, tau, voice) {
+    const length = tau * 8 + 0.02;
+    const bus = metalBus(ctx, kit, voice);
+    setBusFilter(bus, 'bright', 7000 + tone * 1500, when);
+    const envelope = () => {
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, when);
+        gain.gain.linearRampToValueAtTime(level, when + 0.0008);
+        gain.gain.setTargetAtTime(0, when + 0.0008, tau);
+        return gain;
+    };
+    const metalAmp = envelope();
+    const airAmp = envelope();
+    chain(metal(ctx, when, length, 'hat', 0.85 + tone * 0.5), metalAmp, bus.metalIn);
+    chain(noiseSource(ctx, when, length), airAmp, bus.airIn);
+    return [metalAmp, airAmp];
 }
 
 function chokeOpenHats(kit, when) {
@@ -317,22 +429,24 @@ function chokeOpenHats(kit, when) {
         if (voice.start > when) {
             return true;
         }
-        voice.amp.gain.cancelScheduledValues(when);
-        voice.amp.gain.setTargetAtTime(0, when, 0.005);
+        voice.amps.forEach((amp) => {
+            amp.gain.cancelScheduledValues(when);
+            amp.gain.setTargetAtTime(0, when, 0.005);
+        });
         return false;
     });
 }
 
 function playClosedHat(ctx, kit, when, volume, p) {
     chokeOpenHats(kit, when);
-    playHat(ctx, kit, when, p('hatLevel') * volume * 1.7, p('hatTone'), 0.009 + p('hatDecay') * 0.04);
+    playHat(ctx, kit, when, p('hatLevel') * volume * 1.7, p('hatTone'), 0.009 + p('hatDecay') * 0.04, 'hat');
 }
 
 function playOpenHat(ctx, kit, when, volume, p) {
     chokeOpenHats(kit, when);
     const tau = 0.06 + p('openhatDecay') * 0.32;
-    const amp = playHat(ctx, kit, when, p('openhatLevel') * volume * 1.25, p('openhatTone'), tau);
-    kit.openHats.push({ amp, start: when, until: when + tau * 8 });
+    const amps = playHat(ctx, kit, when, p('openhatLevel') * volume * 1.25, p('openhatTone'), tau, 'openhat');
+    kit.openHats.push({ amps, start: when, until: when + tau * 8 });
 }
 
 function playRide(ctx, kit, when, volume, p) {
@@ -341,23 +455,22 @@ function playRide(ctx, kit, when, volume, p) {
     const tau = 0.25 + p('rideDecay') * 0.9;
     const length = tau * 7;
 
-    const amp = decayingGain(ctx, when, level * 1.5, tau);
-    amp.connect(kit.input);
-    const bright = filter(ctx, 'highpass', 4200);
-    chain(bright, amp);
-    chain(metal(ctx, when, length, 330 * (0.85 + tone * 0.4), RIDE_RATIOS), filter(ctx, 'bandpass', 6500 + tone * 2500, 1.6), bright);
-    const air = ctx.createGain();
-    air.gain.value = 0.35;
-    chain(noiseSource(ctx, when, 0.6), filter(ctx, 'highpass', 7500), decayingGain(ctx, when, 1, 0.12), air, bright);
+    const bus = metalBus(ctx, kit, 'ride');
+    setBusFilter(bus, 'band', 6500 + tone * 2500, when);
+    chain(metal(ctx, when, length, 'ride', 0.85 + tone * 0.4), decayingGain(ctx, when, level * 1.5, tau), bus.metalIn);
+    // The stick's air fades with its own 120 ms on top of the ride's decay:
+    // two exponentials in a row make one with the rates added.
+    chain(noiseSource(ctx, when, 0.6), decayingGain(ctx, when, level * 1.5, 1 / (1 / 0.12 + 1 / tau)), bus.airIn);
 
     // Bell: the stick hitting near the cup.
+    const bellTau = tau * 0.6;
     [2950, 4100].forEach((hz) => {
         const osc = ctx.createOscillator();
         osc.type = 'sine';
         osc.frequency.value = hz * (0.9 + tone * 0.2);
         osc.start(when);
-        osc.stop(when + length);
-        chain(osc, decayingGain(ctx, when, level * 0.1, tau * 0.6), kit.input);
+        osc.stop(when + bellTau * 7);
+        chain(osc, decayingGain(ctx, when, level * 0.1, bellTau), kit.input);
     });
 }
 
@@ -409,14 +522,16 @@ function playCowbell(ctx, kit, when, volume, p) {
     const sum = ctx.createGain();
     sum.gain.value = 0.5;
     chain(sum, filter(ctx, 'bandpass', 900 * tune, 1.5), filter(ctx, 'highpass', 400), amp, kit.input);
-    [540, 800].forEach((hz) => {
+    const oscillators = [540, 800].map((hz) => {
         const osc = ctx.createOscillator();
         osc.type = 'square';
         osc.frequency.value = hz * tune;
         osc.start(when);
         osc.stop(when + length);
         osc.connect(sum);
+        return osc;
     });
+    releaseWhenEnded(oscillators, [amp]);
 }
 
 function playShaker(ctx, kit, when, volume, p) {
@@ -445,13 +560,11 @@ function playCrash(ctx, kit, when, volume, p) {
     const tau = 0.4 + p('crashDecay') * 1.4;
     const length = tau * 6;
 
-    const amp = decayingGain(ctx, when, level, tau);
-    amp.connect(kit.input);
-    const bright = filter(ctx, 'highpass', 3500 + tone * 1500);
-    chain(bright, amp);
-    chain(metal(ctx, when, length, 460 * (0.85 + tone * 0.4), CRASH_RATIOS), filter(ctx, 'bandpass', 7500 + tone * 3000, 0.7), bright);
-    // The wash: far more noise than a ride, fading a little faster than the metal.
-    const wash = ctx.createGain();
-    wash.gain.value = 0.6;
-    chain(noiseSource(ctx, when, length), filter(ctx, 'highpass', 6000), decayingGain(ctx, when, 1, tau * 0.7), wash, bright);
+    const bus = metalBus(ctx, kit, 'crash');
+    setBusFilter(bus, 'band', 7500 + tone * 3000, when);
+    setBusFilter(bus, 'bright', 3500 + tone * 1500, when);
+    chain(metal(ctx, when, length, 'crash', 0.85 + tone * 0.4), decayingGain(ctx, when, level, tau), bus.metalIn);
+    // The wash: far more noise than a ride, fading a little faster than the
+    // metal (its own 0.7 tau on top of the crash's decay, rates added).
+    chain(noiseSource(ctx, when, length), decayingGain(ctx, when, level, 1 / (1 / (tau * 0.7) + 1 / tau)), bus.airIn);
 }

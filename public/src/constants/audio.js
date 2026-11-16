@@ -12,6 +12,10 @@ export const LATENCY_SMOOTHING = 0.25;
 // Audio scheduling
 export const AUDIO_LOOKAHEAD_MS = 25;
 export const AUDIO_SCHEDULE_AHEAD_SECONDS = 0.18;
+// Phones and tablets: their main thread stalls longer (garbage collection,
+// layout), so they queue further ahead. Must stay under the server's tempo
+// change lead (500 ms), which guarantees queued audio never has to move.
+export const AUDIO_SCHEDULE_AHEAD_SECONDS_TOUCH = 0.35;
 
 // Recording
 export const RECORDING_STATS_UPDATE_INTERVAL_MS = 200;

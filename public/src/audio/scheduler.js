@@ -9,7 +9,8 @@
 
 import { state, ensureLocalInstrumentCapacity } from '../state/main.js';
 import { audioState } from '../state/audio.js';
-import { AUDIO_LOOKAHEAD_MS, AUDIO_SCHEDULE_AHEAD_SECONDS } from '../constants/audio.js';
+import { AUDIO_LOOKAHEAD_MS, AUDIO_SCHEDULE_AHEAD_SECONDS, AUDIO_SCHEDULE_AHEAD_SECONDS_TOUCH } from '../constants/audio.js';
+import { keepScreenAwake } from './wake-lock.js';
 import { STEP_COUNT } from '../constants/ui.js';
 import { SynthTypes } from '../constants/instruments.js';
 import { clampStepCount } from '../utils/helpers.js';
@@ -33,6 +34,20 @@ import { scheduleFx, silenceFx } from './instruments/fx.js';
 // A step that is due less than this far in the past is still played (a few
 // ms late beats silence); anything later is dropped.
 const LATE_TOLERANCE_SECONDS = 0.015;
+
+const SCHEDULE_AHEAD_SECONDS = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+    ? AUDIO_SCHEDULE_AHEAD_SECONDS_TOUCH
+    : AUDIO_SCHEDULE_AHEAD_SECONDS;
+
+// Running numbers for the ?debug=1 view: gaps between scheduler ticks and how
+// far ahead steps were queued. The view reads and resets the window ones.
+export const schedulerStats = {
+    scheduleAheadMs: SCHEDULE_AHEAD_SECONDS * 1000,
+    lastTickAt: 0,
+    windowMaxTickGapMs: 0,
+    windowMinLeadMs: Infinity,
+    lateSteps: 0,
+};
 
 // Step that is audible right now (-1 when stopped or before the start).
 export function getCurrentStepIndex() {
@@ -67,7 +82,9 @@ export function syncAudioScheduler() {
 
     if (!audioState.schedulerId) {
         audioState.schedulerId = setInterval(runAudioScheduler, AUDIO_LOOKAHEAD_MS);
+        schedulerStats.lastTickAt = 0;
     }
+    keepScreenAwake(true);
     startPlayheadLoop();
     runAudioScheduler();
 }
@@ -80,6 +97,7 @@ export function stopAudioScheduler() {
     audioState.nextStepIndex = 0;
     audioState.lastScheduledTime = -Infinity;
     audioState.scheduledPlayId = null;
+    keepScreenAwake(false);
     // Risers can run for bars; fade out whatever is still sounding.
     silenceFx();
     stopPlayheadLoop();
@@ -98,11 +116,17 @@ export function runAudioScheduler() {
         return;
     }
 
+    const tickAt = performance.now();
+    if (schedulerStats.lastTickAt) {
+        schedulerStats.windowMaxTickGapMs = Math.max(schedulerStats.windowMaxTickGapMs, tickAt - schedulerStats.lastTickAt);
+    }
+    schedulerStats.lastTickAt = tickAt;
+
     updateAudioClockMapping(ctx);
     getAudioGraph(ctx)?.setTempo(state.transport.bpm);
     // Everything that has to start before currentTime + look-ahead is queued
     // now; in server time that window also covers the output latency.
-    const horizonTime = contextTimeToServerTime(ctx, ctx.currentTime + AUDIO_SCHEDULE_AHEAD_SECONDS);
+    const horizonTime = contextTimeToServerTime(ctx, ctx.currentTime + SCHEDULE_AHEAD_SECONDS);
     const result = collectDueSteps(state.transport, {
         nextStep: audioState.nextStepIndex,
         lastTime: audioState.lastScheduledTime,
@@ -113,9 +137,14 @@ export function runAudioScheduler() {
 
     result.due.forEach(({ step, time }) => {
         const when = serverTimeToContextTime(ctx, time);
+        const leadMs = (when - ctx.currentTime) * 1000;
+        schedulerStats.windowMinLeadMs = Math.min(schedulerStats.windowMinLeadMs, leadMs);
         if (when < ctx.currentTime - LATE_TOLERANCE_SECONDS) {
             audioState.droppedSteps += 1;
             return;
+        }
+        if (leadMs < 0) {
+            schedulerStats.lateSteps += 1;
         }
         const stepDuration = (stepTime(state.transport, step + 1) - time) / 1000;
         scheduleStep(step, Math.max(when, ctx.currentTime), stepDuration);

@@ -11,7 +11,7 @@
 import { STAB_PARAMS, STAB_DEFAULT_PITCH, chordIntervals } from '../../shared/rave-stab.js';
 import { noteToFrequency } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getAudioGraph, routeVoice } from '../graph.js';
+import { getAudioGraph, routeVoice, releaseWhenEnded } from '../graph.js';
 
 // Per-saw level (divided by the square root of the chord size), set on a
 // K-weighted meter: a default offbeat stab measures about 4.5 LU under a
@@ -37,9 +37,11 @@ export function scheduleRaveStab(instrument, step, when, ctx) {
     const envelope = p('envelope');
     const decay = 0.04 + p('decay') * 0.5; // amp time constant, s
     const detune = p('detune') * 25; // cents either side
-    const length = 0.01 + decay * 7;
+    // Sources stop at about -48 dB; the echo carries the tail from there.
+    const length = 0.01 + decay * 5.5;
 
     // Two saws per note, one each side; wider detune, wider stab.
+    const sources = [];
     const sides = [-1, 1].map((side) => {
         const bus = ctx.createGain();
         bus.gain.value = SAW_LEVEL / Math.sqrt(intervals.length);
@@ -54,6 +56,7 @@ export function scheduleRaveStab(instrument, step, when, ctx) {
             osc.connect(bus);
             osc.start(when);
             osc.stop(when + length);
+            sources.push(osc);
         });
         return pan;
     });
@@ -77,5 +80,5 @@ export function scheduleRaveStab(instrument, step, when, ctx) {
     amp.gain.setTargetAtTime(0, when + 0.012, decay);
     filter.connect(amp);
 
-    routeVoice(ctx, amp, { delay: p('delay') * 0.6, reverb: p('reverb') });
+    releaseWhenEnded(sources, routeVoice(ctx, amp, { delay: p('delay') * 0.6, reverb: p('reverb') }));
 }

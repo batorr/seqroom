@@ -17,7 +17,7 @@
 import { FX_PARAMS, fxLengthSteps } from '../../shared/fx.js';
 import { createNoiseBuffer } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getAudioGraph, getDriveCurve, routeVoice } from '../graph.js';
+import { getAudioGraph, getDriveCurve, routeVoice, releaseWhenEnded } from '../graph.js';
 
 // Voice levels, set on K-weighted momentary loudness (400 ms windows,
 // through the mix bus): the impact about level with the Rave Kit's kick, the
@@ -46,15 +46,17 @@ export function silenceFx() {
     liveVoices.clear();
 }
 
+// Returns the voice's kill gain and a function that unplugs the voice from
+// the mix once the given sources have all ended.
 function openVoice(ctx, end, sends) {
     const now = ctx.currentTime;
     liveVoices.forEach((voice) => {
         if (voice.ctx !== ctx || voice.end <= now) liveVoices.delete(voice);
     });
     const kill = ctx.createGain();
-    routeVoice(ctx, kill, sends);
+    const wired = routeVoice(ctx, kill, sends);
     liveVoices.add({ ctx, kill, end });
-    return kill;
+    return { out: kill, releaseAfter: (sources) => releaseWhenEnded(sources, wired) };
 }
 
 // Looping noise, started at a random point so two layers never line up.
@@ -67,18 +69,21 @@ function noise(ctx, when, end) {
     return source;
 }
 
+// Returns the two noise sources.
 function stereoNoise(ctx, when, end, into) {
-    [-0.6, 0.6].forEach((pan) => {
+    return [-0.6, 0.6].map((pan) => {
         const panner = ctx.createStereoPanner();
         panner.pan.value = pan;
-        noise(ctx, when, end).connect(panner);
+        const source = noise(ctx, when, end);
+        source.connect(panner);
         panner.connect(into);
+        return source;
     });
 }
 
 function playRiser(ctx, when, duration, level, tone, sends) {
     const end = when + duration;
-    const out = openVoice(ctx, end + 0.05, sends);
+    const { out, releaseAfter } = openVoice(ctx, end + 0.05, sends);
     // Swell on a square-law curve: audible from the first beat, 12 dB under
     // full at the halfway point, then cut dead on the landing step.
     const amp = ctx.createGain();
@@ -93,13 +98,13 @@ function playRiser(ctx, when, duration, level, tone, sends) {
     band.frequency.setValueAtTime(250, when);
     band.frequency.exponentialRampToValueAtTime(3000 + tone * 9000, end);
     band.connect(amp);
-    stereoNoise(ctx, when, end + 0.05, band);
+    const noises = stereoNoise(ctx, when, end + 0.05, band);
 
     const climb = ctx.createGain();
     climb.gain.value = 0.35;
     climb.connect(amp);
     const startHz = 110 * (1 + tone);
-    [-12, 12].forEach((detune) => {
+    const saws = [-12, 12].map((detune) => {
         const osc = ctx.createOscillator();
         osc.type = 'sawtooth';
         osc.detune.value = detune;
@@ -108,13 +113,15 @@ function playRiser(ctx, when, duration, level, tone, sends) {
         osc.connect(climb);
         osc.start(when);
         osc.stop(end + 0.05);
+        return osc;
     });
+    releaseAfter([...noises, ...saws]);
 }
 
 function playDownlifter(ctx, when, duration, level, tone, sends) {
     const length = Math.max(0.25, duration / 2);
     const end = when + length;
-    const out = openVoice(ctx, end, sends);
+    const { out, releaseAfter } = openVoice(ctx, end, sends);
     const amp = ctx.createGain();
     amp.gain.setValueAtTime(0, when);
     amp.gain.linearRampToValueAtTime(level, when + 0.005);
@@ -127,7 +134,7 @@ function playDownlifter(ctx, when, duration, level, tone, sends) {
     low.frequency.setValueAtTime(6000 + tone * 8000, when);
     low.frequency.exponentialRampToValueAtTime(150, end);
     low.connect(amp);
-    stereoNoise(ctx, when, end, low);
+    const noises = stereoNoise(ctx, when, end, low);
 
     const fall = ctx.createOscillator();
     fall.type = 'sawtooth';
@@ -140,11 +147,12 @@ function playDownlifter(ctx, when, duration, level, tone, sends) {
     fallGain.connect(low);
     fall.start(when);
     fall.stop(end);
+    releaseAfter([...noises, fall]);
 }
 
 function playImpact(ctx, when, level, tone, sends) {
     const end = when + 3;
-    const out = openVoice(ctx, end, { ...sends, reverb: Math.min(1, sends.reverb + 0.3) });
+    const { out, releaseAfter } = openVoice(ctx, end, { ...sends, reverb: Math.min(1, sends.reverb + 0.3) });
 
     const boom = ctx.createOscillator();
     boom.type = 'sine';
@@ -171,12 +179,12 @@ function playImpact(ctx, when, level, tone, sends) {
     burstAmp.gain.setTargetAtTime(0, when + 0.005, 0.06);
     burstFilter.connect(burstAmp);
     burstAmp.connect(out);
-    stereoNoise(ctx, when, when + 0.6, burstFilter);
+    releaseAfter([boom, ...stereoNoise(ctx, when, when + 0.6, burstFilter)]);
 }
 
 function playZap(ctx, when, level, tone, sends) {
     const end = when + 0.6;
-    const out = openVoice(ctx, end, { ...sends, delay: Math.min(1, sends.delay + 0.25) });
+    const { out, releaseAfter } = openVoice(ctx, end, { ...sends, delay: Math.min(1, sends.delay + 0.25) });
     const startHz = 1500 + tone * 3500;
 
     const osc = ctx.createOscillator();
@@ -197,6 +205,7 @@ function playZap(ctx, when, level, tone, sends) {
     amp.connect(out);
     osc.start(when);
     osc.stop(end);
+    releaseAfter([osc]);
 }
 
 // stepDuration: seconds per step, so risers and downlifters follow the tempo.

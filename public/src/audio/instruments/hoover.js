@@ -15,7 +15,7 @@
 import { HOOVER_PARAMS, HOOVER_DEFAULT_PITCH } from '../../shared/hoover.js';
 import { noteToFrequency } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getAudioGraph, routeVoice } from '../graph.js';
+import { getAudioGraph, routeVoice, releaseWhenEnded } from '../graph.js';
 
 // Mix level of the voice, set on a K-weighted meter: a busy default riff (six
 // notes a bar) measures about 1.3 LU under a default acid line, a three-note
@@ -55,6 +55,9 @@ export function scheduleHoover(instrument, step, when, ctx, stepDuration = 0.125
     if (previous && previous.ctx === ctx && previous.holdEnd + RELEASE * 5 > when) {
         previous.amp.gain.cancelScheduledValues(when);
         previous.amp.gain.setTargetAtTime(0, when, 0.004);
+        // Faded out within a few ms: stop its oscillators too instead of
+        // letting them run on silently (stop() again moves the stop time).
+        previous.sources.forEach((node) => node.stop(when + 0.03));
     }
 
     // Pitch CV: glide from the previous note, or fall from above.
@@ -139,12 +142,12 @@ export function scheduleHoover(instrument, step, when, ctx, stepDuration = 0.125
     amp.gain.setValueAtTime(level, holdEnd);
     amp.gain.setTargetAtTime(0, holdEnd, RELEASE / 3);
     filter.connect(amp);
-    routeVoice(ctx, amp, { delay: p('delay') * 0.6, reverb: p('reverb') });
+    releaseWhenEnded(oscillators, routeVoice(ctx, amp, { delay: p('delay') * 0.6, reverb: p('reverb') }));
 
     oscillators.forEach((node) => {
         node.start(when);
         node.stop(stopAt);
     });
 
-    voices.set(instrument.id, { ctx, amp, holdEnd, frequency: target });
+    voices.set(instrument.id, { ctx, amp, holdEnd, frequency: target, sources: oscillators });
 }

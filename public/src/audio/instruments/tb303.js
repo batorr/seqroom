@@ -12,7 +12,7 @@
 import { clampValue } from '../../utils/helpers.js';
 import { noteToFrequency } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getDriveCurve, routeVoice } from '../graph.js';
+import { getDriveCurve, routeVoice, releaseWhenEnded } from '../graph.js';
 
 const SLIDE_TIME = 0.06; // seconds, close to the original's fixed glide
 const ATTACK_TIME = 0.003;
@@ -127,10 +127,12 @@ export function scheduleTB303(instrument, step, prevStep, when, ctx, stepDuratio
         bite.connect(shaper);
         shaper.connect(tone);
         tone.connect(out);
-        routeVoice(ctx, out, {
+        const wired = routeVoice(ctx, out, {
             delay: clampValue(getModulatedParam(id, 'delay', params.delay ?? 0.15, 0, 1), 0, 1) * 0.8,
             reverb: clampValue(getModulatedParam(id, 'reverb', params.reverb ?? 0.08, 0, 1), 0, 1),
         });
+        // A slide moves the stop time; the voice is unplugged when it ends.
+        releaseWhenEnded([osc], wired);
         osc.start(when);
         voice = { ctx, osc, amp };
     }

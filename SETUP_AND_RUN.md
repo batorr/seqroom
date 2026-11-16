@@ -98,6 +98,7 @@ Refer to `MODULE_DOCUMENTATION.md` for detailed module descriptions.
 - **Audio unlock**: Most browsers require a user gesture before starting the AudioContext. `app.js` calls `primeAudioUnlock`, but you still need to click once when prompted.
 - **Security**: There is no user authentication or data persistence. Rate limiting is active server-side (room creation, joins, instrument edits, and tempo changes), keyed on the visitor's IP behind a proxy (`lib/client-ip.js`: on Render, or with `TRUST_PROXY=1`). A server holds at most 500 rooms and 24 instruments per room (`SEQROOM_MAX_ROOMS`, `SEQROOM_MAX_INSTRUMENTS_PER_ROOM`); client messages are capped at 100 KB.
 - **Resource usage**: Every client renders all instruments it can see. Keep card counts reasonable on low-power devices.
+- **Playback diagnostics**: add `?debug=1` to the URL (also on seqroom.com) to show a live readout of the audio clock, the scheduler, dropped steps and live voices; `?debug=0` turns it off again.
 - **Single server instance**: All connected rooms share the same Node process; stopping the server clears every room.
 
 ## Useful Commands

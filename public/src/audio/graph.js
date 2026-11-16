@@ -116,24 +116,59 @@ export function getAudioGraph(ctx) {
 
 // Connects a voice's output to the mix, plus optional delay/reverb sends
 // (0..1). The send gains are released with the voice once it stops.
+// Returns the nodes now wired into the mix (the voice's own output and its
+// send gains), for releaseWhenEnded.
 export function routeVoice(ctx, node, { delay = 0, reverb = 0 } = {}) {
     const graph = graphs.get(ctx);
     if (!graph) {
-        return;
+        return [];
     }
+    const wired = [node];
     node.connect(graph.input);
     if (delay > 0.001) {
         const send = ctx.createGain();
         send.gain.value = delay;
         node.connect(send);
         send.connect(graph.delaySend);
+        wired.push(send);
     }
     if (reverb > 0.001) {
         const send = ctx.createGain();
         send.gain.value = reverb;
         node.connect(send);
         send.connect(graph.reverbSend);
+        wired.push(send);
     }
+    return wired;
+}
+
+// Unplugs a finished voice from the shared graph once all of its sources
+// have ended. Safari keeps a played voice's nodes wired into the graph until
+// garbage collection gets round to them, and keeps processing them on every
+// render quantum: within a minute of playback a phone's (or even a Mac's)
+// audio thread could no longer keep up and the sound broke apart. Rendering
+// pulls from the destination, so unplugging the nodes that connect a voice to
+// the shared buses takes the whole voice out of the work at once.
+export function releaseWhenEnded(sources, wired) {
+    const list = sources.filter(Boolean);
+    let pending = list.length;
+    if (!pending) {
+        return;
+    }
+    const release = () => {
+        pending -= 1;
+        if (pending > 0) {
+            return;
+        }
+        wired.forEach((node) => {
+            try {
+                node.disconnect();
+            } catch {
+                // Already unplugged.
+            }
+        });
+    };
+    list.forEach((source) => source.addEventListener('ended', release, { once: true }));
 }
 
 // Exponentially decaying stereo noise, darkening as it decays, after a short

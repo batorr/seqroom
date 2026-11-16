@@ -13,7 +13,7 @@
 import { RUMBLE_PARAMS, RUMBLE_DEFAULT_PITCH } from '../../shared/rumble.js';
 import { noteToFrequency } from '../../utils/audio.js';
 import { getModulatedParam } from '../lfo.js';
-import { getAudioGraph, getDriveCurve } from '../graph.js';
+import { getAudioGraph, getDriveCurve, releaseWhenEnded } from '../graph.js';
 
 const buses = new Map();
 
@@ -148,6 +148,7 @@ export function scheduleRumble(instrument, step, when, ctx, stepDuration = 0.125
     amp.connect(bus.input);
     osc.start(when);
     osc.stop(when + 0.6);
+    releaseWhenEnded([osc], [amp]);
 
     // Pump: drop at the hit, hold, then swell back over the next steps, so
     // the tail peaks between the hits. Hits are at least a step apart and
