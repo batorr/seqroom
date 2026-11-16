@@ -6,6 +6,7 @@ import {
     hydrateState,
     normalizeServerTransport,
     normalizeInstrument,
+    restoreOmittedSampleData,
     setInstrumentLockedBy,
     getDisplayNameOrDefault,
     setDisplayName,
@@ -239,6 +240,7 @@ export function setupSocketEvents() {
     });
 
     socket.on('instrument:update', (instrument) => {
+        restoreOmittedSampleData(instrument, state.instruments.get(instrument?.id));
         const normalized = normalizeInstrument(instrument);
         state.instruments.set(normalized.id, normalized);
         prepareSamplerAudio(normalized);

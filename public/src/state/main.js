@@ -295,6 +295,31 @@ export function normalizeSamplerParams(params = {}) {
     return { slots };
 }
 
+// The server leaves a sample's audio out of updates that do not change it
+// (`dataOmitted`); put back the copy this client already holds for the same
+// sample, before normalizing (which would drop a sample without audio).
+export function restoreOmittedSampleData(incoming, previous) {
+    if (!incoming || incoming.type !== SynthTypes.SAMPLER) {
+        return incoming;
+    }
+    const slots = incoming.params?.slots;
+    if (!slots || typeof slots !== 'object') {
+        return incoming;
+    }
+    SAMPLER_SLOT_IDS.forEach((slotId) => {
+        const sample = slots[slotId]?.sample;
+        if (!sample || !sample.dataOmitted) {
+            return;
+        }
+        const known = previous?.params?.slots?.[slotId]?.sample;
+        if (known && typeof known.data === 'string' && known.updatedAt === sample.updatedAt) {
+            sample.data = known.data;
+        }
+        delete sample.dataOmitted;
+    });
+    return incoming;
+}
+
 export function normalizeSamplerSample(sample) {
     if (!sample || typeof sample !== 'object') {
         return null;

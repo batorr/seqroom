@@ -297,10 +297,39 @@ function createStepSequence(type, length) {
   return Array.from({ length: targetLength }, () => createStepTemplate(type));
 }
 
-function deepCloneSamplerParams(params = {}) {
+// Sample audio (up to ~6.7 MB of base64 per slot) is only sent when a client
+// needs it: on joining a room and when that slot's sample changes. Every
+// other update carries the sample's metadata with `dataOmitted: true`, and
+// the client keeps the audio it already has. Re-sending all six slots on each
+// step toggle or slider move ran the server out of memory.
+const ALL_SAMPLE_DATA = 'all';
+const NO_SAMPLE_DATA = new Set();
+
+function omitSampleData(sample) {
+  const { data, ...meta } = sample;
+  return { ...meta, dataOmitted: true };
+}
+
+// One string per slot that changes whenever the slot's sample does.
+function samplerSampleSignatures(instrument) {
+  const slots = instrument?.params?.slots || {};
+  return Object.fromEntries(SAMPLER_SLOT_IDS.map((slotId) => {
+    const sample = slots[slotId]?.sample;
+    return [slotId, sample ? `${sample.updatedAt}:${sample.bytesLength}:${sample.data?.length}` : 'none'];
+  }));
+}
+
+function changedSampleSlots(before, instrument) {
+  const after = samplerSampleSignatures(instrument);
+  return new Set(SAMPLER_SLOT_IDS.filter((slotId) => before[slotId] !== after[slotId]));
+}
+
+// sampleData: ALL_SAMPLE_DATA, or a Set of the slot ids whose audio to include.
+function deepCloneSamplerParams(params = {}, sampleData = ALL_SAMPLE_DATA) {
   const clone = { slots: {} };
   for (const slotId of SAMPLER_SLOT_IDS) {
     const source = params?.slots?.[slotId];
+    const keepData = sampleData === ALL_SAMPLE_DATA || (sampleData instanceof Set && sampleData.has(slotId));
     if (source && typeof source === 'object') {
       clone.slots[slotId] = {
         id: slotId,
@@ -313,7 +342,7 @@ function deepCloneSamplerParams(params = {}) {
         reverse: Boolean(source.reverse),
         mute: Boolean(source.mute),
         sample: source.sample && typeof source.sample === 'object'
-          ? { ...source.sample }
+          ? (keepData ? { ...source.sample } : omitSampleData(source.sample))
           : null,
       };
     } else {
@@ -323,7 +352,7 @@ function deepCloneSamplerParams(params = {}) {
   return clone;
 }
 
-function cloneInstrument(instrument) {
+function cloneInstrument(instrument, { sampleData = ALL_SAMPLE_DATA } = {}) {
   if (instrument.type === SynthTypes.DRUMS) {
     instrument.params = drumKit.normalizeDrumParams(instrument.params);
   }
@@ -418,7 +447,7 @@ function cloneInstrument(instrument) {
   } else if (instrument.type === SynthTypes.FX) {
     base.params = fxKit.normalizeFxParams(instrument.params);
   } else if (instrument.type === SynthTypes.SAMPLER) {
-    base.params = deepCloneSamplerParams(instrument.params);
+    base.params = deepCloneSamplerParams(instrument.params, sampleData);
   } else {
     base.params = { ...instrument.params };
     if (
@@ -945,7 +974,9 @@ function broadcastTransportState(roomId) {
   io.to(roomId).emit('tempo:update', room.transport.bpm);
 }
 
-function broadcastInstrumentState(roomId, instrumentId) {
+// Updates leave sample audio out unless sampleSlots names the slots whose
+// sample just changed (see deepCloneSamplerParams).
+function broadcastInstrumentState(roomId, instrumentId, { sampleSlots = NO_SAMPLE_DATA } = {}) {
   const room = rooms.get(roomId);
   if (!room) {
     return;
@@ -956,7 +987,7 @@ function broadcastInstrumentState(roomId, instrumentId) {
     return;
   }
 
-  io.to(roomId).emit('instrument:update', cloneInstrument(instrument));
+  io.to(roomId).emit('instrument:update', cloneInstrument(instrument, { sampleData: sampleSlots }));
 }
 
 function broadcastInstrumentRemoval(roomId, instrumentId) {
@@ -1362,8 +1393,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Only a slot whose sample was uploaded or replaced goes out with audio.
+    const samplesBefore = instrument.type === SynthTypes.SAMPLER ? samplerSampleSignatures(instrument) : null;
     applyInstrumentParams(instrument, params);
-    broadcastInstrumentState(room.id, instrumentId);
+    const sampleSlots = samplesBefore ? changedSampleSlots(samplesBefore, instrument) : NO_SAMPLE_DATA;
+    broadcastInstrumentState(room.id, instrumentId, { sampleSlots });
   });
 
   on('instrument:mute', async ({ instrumentId, muted } = {}) => {
