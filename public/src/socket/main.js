@@ -32,6 +32,7 @@ import { ensureAudioContext, applyClockCorrection, getClientAbsoluteTime } from 
 import { hydrateServerLFOs, syncLFOClock } from '../audio/lfo.js';
 import { renderLFOCards, refreshParamIndicators } from '../ui/lfo-card.js';
 import { computeClockSample } from '../shared/clock-sync.js';
+import { saveRoomToFile, roomFileErrorMessage } from '../ui/room-file.js';
 
 // Initialize Socket.IO
 export const socket = io({ autoConnect: false });
@@ -74,11 +75,19 @@ function stopRejoinTokenRefresh() {
 }
 
 function handleRejoinFailure(errorCode) {
-    leaveRoom();
     const reason = errorCode === 'room-not-found'
         ? 'The room no longer exists on the server.'
         : `Reason: ${errorCode || 'unknown'}.`;
-    window.alert(`Lost the connection to the room and could not rejoin it. ${reason}`);
+    const message = `Lost the connection to the room and could not rejoin it. ${reason}`;
+    // This browser still has the room's music: offer to keep it before it goes.
+    if (state.instruments.size > 0) {
+        if (window.confirm(`${message}\n\nSave the room to a file? You can carry on with it later with “Open saved room” on the start page.`)) {
+            saveRoomToFile();
+        }
+    } else {
+        window.alert(message);
+    }
+    leaveRoom();
 }
 
 function rejoinRoomAfterReconnect() {
@@ -677,8 +686,9 @@ export function setupRecordingControls(recordToggleBtn) {
     }).catch(console.error);
 }
 
-// Connect to a room
-export function connectToRoom({ mode, roomName = '', token = '' }) {
+// Connect to a room. `roomFile` (create only): a saved room, packed by
+// ui/room-file.js, to open instead of an empty room.
+export function connectToRoom({ mode, roomName = '', token = '', roomFile = null }) {
     if (socketState.pendingRoomRequest) {
         return;
     }
@@ -691,7 +701,8 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
     resetPendingRoomRequestState();
     socketState.pendingRoomRequest = true;
     socketState.pendingRoomRequestMeta = { mode };
-    socketState.pendingDefaultInstrumentLabel = mode === 'create' ? getDisplayNameOrDefault() : null;
+    // A saved room keeps the names of whoever added its instruments.
+    socketState.pendingDefaultInstrumentLabel = mode === 'create' && !roomFile ? getDisplayNameOrDefault() : null;
     socketState.pendingInstrumentCreatorLabels.clear();
 
     state.isInRoom = false;
@@ -718,7 +729,7 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
         failPendingRoomRequest('request-timeout');
     }, ROOM_REQUEST_TIMEOUT_MS);
     const eventPayload = mode === 'create'
-        ? { roomName, displayName: getDisplayNameOrDefault() }
+        ? { roomName, displayName: getDisplayNameOrDefault(), ...(roomFile ? { roomFile } : {}) }
         : { token };
     socket.emit(eventName, eventPayload, (response = {}) => {
         const wasPending = socketState.pendingRoomRequest;
@@ -729,7 +740,7 @@ export function connectToRoom({ mode, roomName = '', token = '' }) {
         }
 
         if (!response.ok) {
-            handleRoomError(mode, response.error);
+            handleRoomError(mode, response.error, response);
             return;
         }
 
@@ -815,9 +826,12 @@ function getInviteDetailsFromLocation() {
     return { slug, token: token.trim() };
 }
 
-// Handle room connection errors
-export function handleRoomError(mode, errorCode) {
-    if (mode === 'create' && errorCode === 'invalid-room-name') {
+// Handle room connection errors; `details` is the server's whole answer.
+export function handleRoomError(mode, errorCode, details = {}) {
+    const roomFileMessage = roomFileErrorMessage(errorCode, details);
+    if (roomFileMessage) {
+        window.alert(roomFileMessage);
+    } else if (mode === 'create' && errorCode === 'invalid-room-name') {
         window.alert('Choose a room name with letters or numbers.');
     } else if (mode === 'create' && errorCode === 'room-already-exists') {
         window.alert('Room slug already exists. Try a different name.');

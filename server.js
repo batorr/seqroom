@@ -1,5 +1,7 @@
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
+const { promisify } = require('util');
 const { pathToFileURL } = require('url');
 const express = require('express');
 const http = require('http');
@@ -573,6 +575,134 @@ function applyStepChanges(step, changes = {}) {
   }
 }
 
+// ─── Room files ─────────────────────────────────────────────────────────
+// A room saved by a browser (public/src/shared/room-file.js) can be opened in
+// a new room or loaded into the one a visitor is in.
+
+const gunzip = promisify(zlib.gunzip);
+
+// The Acid Bass and Poly Synth have no shared parameter schema: a file may
+// only set the parameters a new one has, of the same kind, within the range
+// of their sliders (0..1 unless listed here).
+const SYNTH_PARAM_MAX = {
+  [SynthTypes.SIMPLE]: { attack: 2, decay: 2, release: 3 },
+};
+
+function filterSynthParams(type, params) {
+  const defaults = createDefaultParams(type);
+  const maxima = SYNTH_PARAM_MAX[type] || {};
+  const filtered = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (!Object.prototype.hasOwnProperty.call(defaults, key) || typeof value !== typeof defaults[key]) {
+      continue;
+    }
+    filtered[key] = typeof value === 'number' ? clamp(value, 0, maxima[key] ?? 1) : value;
+  }
+  return filtered;
+}
+
+// Browsers send the file gzip-compressed so a big room fits in one socket
+// message; ones that cannot compress send its plain text.
+async function readRoomFilePayload(payload) {
+  let bytes;
+  if (Buffer.isBuffer(payload)) {
+    bytes = payload;
+  } else if (payload instanceof ArrayBuffer) {
+    bytes = Buffer.from(payload);
+  } else {
+    return { ok: false, error: 'not-a-room-file' };
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    try {
+      bytes = await gunzip(bytes, { maxOutputLength: roomFileKit.ROOM_FILE_MAX_BYTES });
+    } catch (error) {
+      return { ok: false, error: error.code === 'ERR_BUFFER_TOO_LARGE' ? 'room-file-too-large' : 'not-a-room-file' };
+    }
+  } else if (bytes.length > roomFileKit.ROOM_FILE_MAX_BYTES) {
+    return { ok: false, error: 'room-file-too-large' };
+  }
+
+  return roomFileKit.readRoomFile(bytes.toString('utf8'));
+}
+
+// New instruments (with new ids) and LFOs for what a room file describes,
+// built through the same normalisers as live edits. Instruments of a type
+// this server does not know are left out.
+function buildRoomContent(file, { creatorUserId }) {
+  const instruments = [];
+  const ids = new Map(); // position in the file → new instrument id
+
+  file.instruments.forEach((entry, position) => {
+    if (!Object.values(SynthTypes).includes(entry.type)) {
+      return;
+    }
+    const instrument = createInstrument(entry.type, {
+      name: entry.name,
+      stepCount: entry.stepCount,
+      creatorUserId,
+      creatorDisplayName: entry.creatorDisplayName,
+    });
+    const hasSchema = entry.type !== SynthTypes.TB303 && entry.type !== SynthTypes.SIMPLE;
+    applyInstrumentParams(instrument, hasSchema ? entry.params : filterSynthParams(entry.type, entry.params));
+    instrument.muted = entry.muted;
+
+    ensureInstrumentStepCapacity(instrument, entry.steps.length);
+    entry.steps.forEach((step, index) => {
+      const target = instrument.steps[index];
+      if (entry.type === SynthTypes.DRUMS || entry.type === SynthTypes.FX) {
+        const layers = entry.type === SynthTypes.DRUMS ? ensureDrumLayers(target) : ensureFxLayers(target);
+        for (const id of Object.keys(step.layers || {})) {
+          if (id in layers) {
+            layers[id] = true;
+          }
+        }
+        target.active = Object.values(layers).some(Boolean);
+      } else {
+        applyStepChanges(target, step);
+      }
+    });
+
+    ids.set(position, instrument.id);
+    instruments.push(instrument);
+  });
+
+  const lfos = file.lfos.slice(0, MAX_LFOS_PER_ROOM).map((entry) => {
+    const lfo = createLFOState();
+    applyLFOParams(lfo, {
+      ...entry.params,
+      targets: entry.targets
+        .filter((target) => ids.has(target.instrument))
+        .map((target) => ({ ...target, instrumentId: ids.get(target.instrument) })),
+    });
+    return lfo;
+  });
+
+  return { instruments, lfos, bpm: file.bpm };
+}
+
+// Reads a room file sent by `socket` into room content, or says why not.
+async function prepareRoomContent(payload, socket) {
+  const result = await readRoomFilePayload(payload);
+  if (!result.ok) {
+    return result;
+  }
+  const known = result.room.instruments.filter((entry) => Object.values(SynthTypes).includes(entry.type));
+  if (known.length > MAX_INSTRUMENTS_PER_ROOM) {
+    return { ok: false, error: 'instrument-limit', limit: MAX_INSTRUMENTS_PER_ROOM };
+  }
+  return { ok: true, content: buildRoomContent(result.room, { creatorUserId: socket.id }) };
+}
+
+function replaceRoomContent(room, content) {
+  room.instruments = new Map(content.instruments.map((instrument) => [instrument.id, instrument]));
+  room.instrumentOrder = content.instruments.map((instrument) => instrument.id);
+  room.lfos = content.lfos;
+  if (content.bpm !== null) {
+    updateRoomTempo(room, content.bpm);
+  }
+}
+
 function getRoomForSocket(socket) {
   const roomId = socket.data.roomId;
   if (!roomId) {
@@ -646,6 +776,7 @@ let rumbleKit = null;
 let stabKit = null;
 let hooverKit = null;
 let fxKit = null;
+let roomFileKit = null;
 
 // Limits that keep one instance's memory bounded whatever visitors do.
 // Overridable through the environment (e.g. on Render) or for tests.
@@ -655,6 +786,7 @@ const envLimit = (name, fallback) => {
 };
 const MAX_ROOMS = envLimit('SEQROOM_MAX_ROOMS', 500);
 const MAX_INSTRUMENTS_PER_ROOM = envLimit('SEQROOM_MAX_INSTRUMENTS_PER_ROOM', 24);
+const MAX_LFOS_PER_ROOM = 8;
 
 // An emptied room waits this long for its people to reconnect.
 const ROOM_EMPTY_TIMEOUT_MS = 15 * 60 * 1000;
@@ -709,14 +841,16 @@ app.get('/r/:slug', (_req, res) => {
 const server = http.createServer(app);
 
 // Every client message is a small JSON command (a step, a parameter, an LFO
-// with at most 32 targets), so anything near this size is not legitimate;
-// a low cap keeps one client from making the server buffer large payloads.
+// with at most 32 targets) or a gzip-compressed room file (a few KB even for
+// a full room), so anything near this size is not legitimate; a low cap
+// keeps one client from making the server buffer large payloads.
 const SOCKET_MAX_MESSAGE_BYTES = 100 * 1024;
 const io = new Server(server, { maxHttpBufferSize: SOCKET_MAX_MESSAGE_BYTES });
 
 // Rate limiters: points = max calls, duration = time window in seconds
 const rateLimiters = {
   roomCreate:      new RateLimiterMemory({ points: 5,   duration: 60 }),
+  roomImport:      new RateLimiterMemory({ points: 5,   duration: 60 }),
   joinWithInvite:  new RateLimiterMemory({ points: 10,  duration: 60 }),
   instrumentAdd:   new RateLimiterMemory({ points: 10,  duration: 60 }),
   // Live knob tweaking is the point of an acid set; clients throttle to ~20/s.
@@ -782,13 +916,23 @@ io.on('connection', (socket) => {
   const on = (event, handler) => registerSafeHandler(socket, event, handler);
   socket.data.clientIp = clientAddress(socket.handshake, { trustProxy: TRUST_PROXY });
 
-  on('room:create', async ({ roomName, displayName } = {}, callback) => {
+  // `roomFile`, when given, is a saved room to open instead of a fresh one.
+  on('room:create', async ({ roomName, displayName, roomFile } = {}, callback) => {
     const respond = typeof callback === 'function' ? callback : () => {};
     if (!await checkRateLimit(rateLimiters.roomCreate, socket.data.clientIp, socket, respond)) return;
     const sanitizedName = sanitizeRoomName(roomName);
     if (!sanitizedName) {
       respond({ ok: false, error: 'invalid-room-name' });
       return;
+    }
+    let content = null;
+    if (roomFile !== undefined && roomFile !== null) {
+      const prepared = await prepareRoomContent(roomFile, socket);
+      if (!prepared.ok) {
+        respond(prepared);
+        return;
+      }
+      content = prepared.content;
     }
     if (!makeRoomForNewRoom()) {
       respond({ ok: false, error: 'server-full' });
@@ -802,6 +946,7 @@ io.on('connection', (socket) => {
       creatorUserId: socket.id,
       creatorDisplayName: sanitizeDisplayName(displayName),
       ownerUserId: socket.id,
+      content,
     });
 
     try {
@@ -861,6 +1006,32 @@ io.on('connection', (socket) => {
     } catch (error) {
       respond({ ok: false, error: error.message });
     }
+  });
+
+  // Replaces the music in the sender's room with a saved room, for everyone in it.
+  on('room:import', async ({ roomFile } = {}, callback) => {
+    const respond = typeof callback === 'function' ? callback : () => {};
+    if (!await checkRateLimit(rateLimiters.roomImport, socket.data.clientIp, socket, respond)) return;
+    const room = getRoomForSocket(socket);
+    if (!room) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    const prepared = await prepareRoomContent(roomFile, socket);
+    if (!prepared.ok) {
+      respond(prepared);
+      return;
+    }
+    // The sender may have left while the file was being read.
+    if (getRoomForSocket(socket) !== room) {
+      respond({ ok: false, error: 'not-in-room' });
+      return;
+    }
+
+    replaceRoomContent(room, prepared.content);
+    sendRoomStateToMembers(room);
+    respond({ ok: true });
   });
 
   on('room:leave', async (_payload, callback) => {
@@ -1259,7 +1430,7 @@ io.on('connection', (socket) => {
     if (!await checkRateLimit(rateLimiters.lfoAdd, socket.id, socket, respond)) return;
     const room = getRoomForSocket(socket);
     if (!room) { respond({ ok: false, error: 'not-in-room' }); return; }
-    if ((room.lfos || []).length >= 8) { respond({ ok: false, error: 'lfo-limit' }); return; }
+    if ((room.lfos || []).length >= MAX_LFOS_PER_ROOM) { respond({ ok: false, error: 'lfo-limit' }); return; }
     const lfo = createLFOState();
     room.lfos = room.lfos || [];
     room.lfos.push(lfo);
@@ -1301,12 +1472,15 @@ io.on('connection', (socket) => {
   });
 });
 
+// `content` (from buildRoomContent) fills the room from a saved room file;
+// without it the room starts with one Acid Bass.
 function createRoomState({
   roomName = '',
   roomSlug = '',
   creatorUserId = null,
   creatorDisplayName = '',
   ownerUserId = null,
+  content = null,
 } = {}) {
   const roomId = generateRoomId();
   const now = Date.now();
@@ -1330,12 +1504,16 @@ function createRoomState({
     lfos: [],
   };
 
-  const defaultInstrument = createInstrument(SynthTypes.TB303, {
-    creatorUserId,
-    creatorDisplayName,
-  });
-  state.instruments.set(defaultInstrument.id, defaultInstrument);
-  state.instrumentOrder.push(defaultInstrument.id);
+  if (content) {
+    replaceRoomContent(state, content);
+  } else {
+    const defaultInstrument = createInstrument(SynthTypes.TB303, {
+      creatorUserId,
+      creatorDisplayName,
+    });
+    state.instruments.set(defaultInstrument.id, defaultInstrument);
+    state.instrumentOrder.push(defaultInstrument.id);
+  }
 
   rooms.set(roomId, state);
   if (state.slug) {
@@ -1360,24 +1538,39 @@ async function joinRoom(socket, roomId, { role = 'guest' } = {}) {
      joinedAt: Date.now(),
    });
 
+  emitRoomState(socket, room, role);
+  broadcastConnections(roomId);
+  emitImmediatePing(socket);
+}
+
+// The whole room, as a client needs it on joining (or after a room file
+// replaced everything in it).
+function emitRoomState(socket, room, role) {
   const state = serializeRoomState(room);
   socket.emit('state:init', {
-    roomId,
+    roomId: room.id,
     roomSlug: state.slug,
     role,
     transport: state.transport,
     instruments: state.instruments,
     instrumentOrder: state.instrumentOrder,
     lfos: state.lfos || [],
+    connections: io.sockets.adapter.rooms.get(room.id)?.size || 0,
     // Legacy fields for backward compatibility.
     pattern: state.legacyPattern,
     legacyPattern: state.legacyPattern,
     tempo: state.transport.bpm,
     sessionStartTime: state.transport.sessionStartTime,
   });
+}
 
-  broadcastConnections(roomId);
-  emitImmediatePing(socket);
+function sendRoomStateToMembers(room) {
+  for (const [socketId, member] of room.members) {
+    const memberSocket = io.sockets.sockets.get(socketId);
+    if (memberSocket) {
+      emitRoomState(memberSocket, room, member.role);
+    }
+  }
 }
 
 function removeSocketFromRoom(room, socketId) {
@@ -1622,18 +1815,19 @@ function logLocalAddresses() {
   });
 }
 
-// The transport timeline and the drum kit, rumble, rave stab, hoover and FX
-// schemas are ES modules shared with the browser, so they are loaded before
-// the server accepts connections.
+// The transport timeline, the drum kit, rumble, rave stab, hoover and FX
+// schemas and the room file format are ES modules shared with the browser,
+// so they are loaded before the server accepts connections.
 const loadShared = (file) => import(pathToFileURL(path.join(__dirname, 'public', 'src', 'shared', file)).href);
-Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js'), loadShared('fx.js')])
-  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule, fxModule]) => {
+Promise.all([loadShared('timeline.js'), loadShared('drum-kit.js'), loadShared('rumble.js'), loadShared('rave-stab.js'), loadShared('hoover.js'), loadShared('fx.js'), loadShared('room-file.js')])
+  .then(([timelineModule, drumKitModule, rumbleModule, stabModule, hooverModule, fxModule, roomFileModule]) => {
     timeline = timelineModule;
     drumKit = drumKitModule;
     rumbleKit = rumbleModule;
     stabKit = stabModule;
     hooverKit = hooverModule;
     fxKit = fxModule;
+    roomFileKit = roomFileModule;
     server.listen(PORT, () => {
       console.log(`Seqroom server running on http://localhost:${PORT}`);
       logLocalAddresses();

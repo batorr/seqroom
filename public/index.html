@@ -274,7 +274,7 @@
       #sync-status { min-width: 15ch; }
       #connections { min-width: 9ch; }
 
-      .room-actions { display: flex; gap: 4px; }
+      .room-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 
       .app-footer {
         max-width: 1440px;
@@ -1289,6 +1289,8 @@
           </dl>
           <div class="room-actions">
             <button id="invite-room" class="primary" type="button">Invite</button>
+            <button id="save-room" class="subtle" type="button" title="Save this room to a file you can open again later">Save</button>
+            <button id="load-room" class="subtle" type="button" title="Load a saved room into this room, for everyone in it">Load</button>
             <button id="leave-room" class="subtle" type="button">Leave</button>
           </div>
         </div>
@@ -1309,7 +1311,9 @@
           <div class="landing-actions">
             <button id="create-room" class="primary" type="button">Create room</button>
             <button id="join-room" class="subtle" type="button">Join a room</button>
+            <button id="open-room-file" class="subtle" type="button" title="Open a room you saved to a file and carry on where you left off">Open saved room</button>
           </div>
+          <input id="room-file-input" type="file" accept=".json,application/json" hidden />
         </div>
         <ol class="landing-steps">
           <li><span class="step-num">01</span><strong>Start a room</strong><span>Give it a name and you are in.</span></li>

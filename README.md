@@ -22,6 +22,7 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 - Tempo range 30–300 BPM with numeric input and slider, plus transport controls shared by every client
 - A shared score: every instrument is a row of lanes on the same 16-column grid, with the selected instrument's sound settings below it
 - Instrument locking to keep collaborators coordinated
+- Saving a room to a file and opening it again later, in a new room or the one you are in
 - Local recording pipeline using `public/recording-processor.js`, downloading 32-bit float WAV files
 
 ## Room Flow
@@ -31,6 +32,7 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 4. Recipients open the invite link directly in their browser, or click **Join Room** on the landing page and paste the link/token. They immediately receive the full room state (tempo, transport phase, instruments).
 5. Invite tokens expire after 1 hour. Rooms persist on the server for 15 minutes after the last member leaves (so people can reconnect), then are cleaned up automatically.
 6. Use **Leave Room** to return to the landing page.
+7. To carry on later, click **Save** in the room: it downloads the room (tempo, instruments with their steps and sounds, LFOs) as a `.seqroom.json` file. **Open saved room** on the landing page opens that file in a new room, and **Load** inside a room replaces that room's music with it, for everyone in the room. If the connection drops and the room is gone from the server, the browser offers to save it before returning to the landing page.
 
 ## Working With The Sequencer
 - **Adding instruments**: Select Acid Bass, Rave Kit, Rumble, Rave Stab, Hoover, FX or Poly Synth from the add-instrument dialog. Instrument cards appear in the order they were created; drag ordering is handled server-side when card reorder buttons are used.
@@ -48,6 +50,6 @@ The server prints both `http://localhost:3000` and any discoverable LAN addresse
 ## Notes
 - Browsers require a user gesture before audio can start; click once anywhere in the document when prompted to unlock audio playback.
 - The server never generates sound; every participant’s browser is responsible for synthesis, which means CPU usage scales with the number of instruments per client.
-- There is no user authentication or data persistence. Rate limiting is applied server-side to room creation, joins, instrument operations, and tempo changes; room creation and joins are limited per visitor IP, taken from the proxy headers on Render (Cloudflare's `CF-Connecting-IP` only when the request really came through Cloudflare). One server holds at most 500 rooms (rooms nobody is in make way first) and 24 instruments per room; `SEQROOM_MAX_ROOMS` and `SEQROOM_MAX_INSTRUMENTS_PER_ROOM` override these, and `TRUST_PROXY=1` trusts proxy headers on hosts other than Render.
+- There is no user authentication, and rooms live only in the server's memory; save a room to a file to keep it. Rate limiting is applied server-side to room creation, joins, instrument operations, and tempo changes; room creation and joins are limited per visitor IP, taken from the proxy headers on Render (Cloudflare's `CF-Connecting-IP` only when the request really came through Cloudflare). One server holds at most 500 rooms (rooms nobody is in make way first) and 24 instruments per room; `SEQROOM_MAX_ROOMS` and `SEQROOM_MAX_INSTRUMENTS_PER_ROOM` override these, and `TRUST_PROXY=1` trusts proxy headers on hosts other than Render.
 - Recording requires AudioWorklet support. If the button is disabled, the browser does not expose `AudioWorkletNode`.
 - See `SETUP_AND_RUN.md` for in-depth setup, troubleshooting, and architecture notes, and `MODULE_DOCUMENTATION.md` for module-level details.

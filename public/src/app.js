@@ -22,7 +22,8 @@ import {
 import { setupTempoControls, updateTempoDisplay } from './ui/tempo-controls.js';
 
 // Import socket module
-import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls, attemptAutoJoinFromInvite } from './socket/main.js';
+import { socket, setupSocketEvents, setupRoomControls, setupTransportControls, setupRecordingControls, attemptAutoJoinFromInvite, connectToRoom } from './socket/main.js';
+import { setupRoomFileControls } from './ui/room-file.js';
 import { setupDisplayNameControls } from './ui/display-name.js';
 import { installAudioUnlock } from './audio/main.js';
 import { initLFOPanel, setupLFOSocketEvents } from './ui/lfo-card.js';
@@ -34,6 +35,7 @@ export function initialize() {
     setupTransportControls(transportToggleBtn, addSynthBtn);
     setupRecordingControls(recordToggleBtn);
     setupRoomControls(createRoomBtn, joinRoomBtn, leaveRoomBtn);
+    setupRoomFileControls({ socket, connectToRoom });
     setupSynthModal(socket);
     setupInviteModal();
     setupAboutModal();
