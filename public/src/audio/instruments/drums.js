@@ -7,7 +7,12 @@
 // - clap: four bursts of band-passed noise, the last one with a tail,
 // - rim: a short tuned click,
 // - hats and ride: six square waves at inharmonic ratios ("metal"), band-passed
-//   and mixed with a little noise; a closed hat chokes a ringing open hat.
+//   and mixed with a little noise; a closed hat chokes a ringing open hat,
+// - toms: a sine dropping onto its pitch, a triangle skin partial and a stick
+//   click, tuned low/mid/high,
+// - cowbell: two detuned squares through a band-pass with a two-stage decay,
+// - shaker: high, band-passed noise with a soft bead attack,
+// - crash: brighter metal with a big wash of noise and a long fade.
 // Each kit has a bus with optional drive and a send to the shared room reverb.
 
 import { DRUM_PARAMS } from '../../shared/drum-kit.js';
@@ -19,6 +24,19 @@ import { getAudioGraph, getDriveCurve } from '../graph.js';
 // 540 and 800 Hz): the basis of analogue hi-hats.
 const HAT_RATIOS = [1, 1.4827, 1.8003, 2.546, 2.6303, 3.8967];
 const RIDE_RATIOS = [1, 1.3427, 1.7915, 2.1702, 2.5313, 3.1241];
+const CRASH_RATIOS = [1, 1.483, 1.932, 2.546, 2.895, 3.718];
+
+// Gains of the newer voices, set on K-weighted momentary loudness against
+// the other voices at their defaults: toms between the clap and the snare
+// (low loudest), the cowbell about 4 LU under the clap, a 16th shaker about
+// 1.5 LU under 16th closed hats, a crash about 3 LU over a ride hit.
+const TOM_LEVEL = 0.25;
+const COWBELL_LEVEL = 1;
+const SHAKER_LEVEL = 0.45;
+const CRASH_LEVEL = 0.9;
+
+// Tom fundamentals before tuning (Tune spans 0.75x to 1.35x).
+const TOM_BASE_HZ = { tomlow: 95, tommid: 135, tomhigh: 190 };
 
 const kits = new Map();
 
@@ -99,6 +117,12 @@ export function scheduleDrums(instrument, step, when, ctx) {
     if (layers.openhat) playOpenHat(ctx, kit, when, volume, p);
     if (layers.hat) playClosedHat(ctx, kit, when, volume, p);
     if (layers.ride) playRide(ctx, kit, when, volume, p);
+    ['tomlow', 'tommid', 'tomhigh'].forEach((tom) => {
+        if (layers[tom]) playTom(ctx, kit, when, volume, p, tom);
+    });
+    if (layers.cowbell) playCowbell(ctx, kit, when, volume, p);
+    if (layers.shaker) playShaker(ctx, kit, when, volume, p);
+    if (layers.crash) playCrash(ctx, kit, when, volume, p);
 }
 
 // ── Building blocks ──────────────────────────────────────────────────────
@@ -335,4 +359,99 @@ function playRide(ctx, kit, when, volume, p) {
         osc.stop(when + length);
         chain(osc, decayingGain(ctx, when, level * 0.1, tau * 0.6), kit.input);
     });
+}
+
+function playTom(ctx, kit, when, volume, p, tom) {
+    const level = p(`${tom}Level`) * volume * TOM_LEVEL;
+    const base = TOM_BASE_HZ[tom] * (0.75 + p(`${tom}Tune`) * 0.6);
+    const tau = 0.06 + p(`${tom}Decay`) * 0.3;
+    const length = 0.02 + tau * 7;
+
+    // Body: a quick drop onto the pitch, like a small kick.
+    const body = ctx.createOscillator();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(base * 1.7, when);
+    body.frequency.exponentialRampToValueAtTime(base * 1.05, when + 0.05);
+    body.frequency.exponentialRampToValueAtTime(base, when + 0.25);
+    body.start(when);
+    body.stop(when + length);
+    chain(body, decayingGain(ctx, when, level, tau), kit.input);
+
+    // Skin: a quieter, shorter partial a fifth up.
+    const skin = ctx.createOscillator();
+    skin.type = 'triangle';
+    skin.frequency.value = base * 1.5;
+    skin.start(when);
+    skin.stop(when + length);
+    chain(skin, decayingGain(ctx, when, level * 0.25, tau * 0.5), kit.input);
+
+    // Stick.
+    chain(
+        noiseSource(ctx, when, 0.03),
+        filter(ctx, 'bandpass', 2500, 1),
+        decayingGain(ctx, when, level * 0.3, 0.004),
+        kit.input,
+    );
+}
+
+function playCowbell(ctx, kit, when, volume, p) {
+    const level = p('cowbellLevel') * volume * COWBELL_LEVEL;
+    const tune = 0.8 + p('cowbellTune') * 0.4;
+    const tail = 0.05 + p('cowbellDecay') * 0.35;
+    const length = 0.05 + tail * 7;
+
+    // A sharp clank that settles into a ringing tail.
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0, when);
+    amp.gain.linearRampToValueAtTime(level, when + 0.001);
+    amp.gain.setTargetAtTime(level * 0.35, when + 0.001, 0.012);
+    amp.gain.setTargetAtTime(0, when + 0.04, tail);
+    const sum = ctx.createGain();
+    sum.gain.value = 0.5;
+    chain(sum, filter(ctx, 'bandpass', 900 * tune, 1.5), filter(ctx, 'highpass', 400), amp, kit.input);
+    [540, 800].forEach((hz) => {
+        const osc = ctx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.value = hz * tune;
+        osc.start(when);
+        osc.stop(when + length);
+        osc.connect(sum);
+    });
+}
+
+function playShaker(ctx, kit, when, volume, p) {
+    const level = p('shakerLevel') * volume * SHAKER_LEVEL;
+    const tone = p('shakerTone');
+    const tau = 0.012 + p('shakerDecay') * 0.05;
+    const length = 0.01 + tau * 8;
+
+    // The beads take a few milliseconds to all hit the shell.
+    const amp = ctx.createGain();
+    amp.gain.setValueAtTime(0, when);
+    amp.gain.linearRampToValueAtTime(level, when + 0.006);
+    amp.gain.setTargetAtTime(0, when + 0.006, tau);
+    chain(
+        noiseSource(ctx, when, length),
+        filter(ctx, 'highpass', 4000 + tone * 3000),
+        filter(ctx, 'bandpass', 7000 + tone * 4000, 0.8),
+        amp,
+        kit.input,
+    );
+}
+
+function playCrash(ctx, kit, when, volume, p) {
+    const level = p('crashLevel') * volume * CRASH_LEVEL;
+    const tone = p('crashTone');
+    const tau = 0.4 + p('crashDecay') * 1.4;
+    const length = tau * 6;
+
+    const amp = decayingGain(ctx, when, level, tau);
+    amp.connect(kit.input);
+    const bright = filter(ctx, 'highpass', 3500 + tone * 1500);
+    chain(bright, amp);
+    chain(metal(ctx, when, length, 460 * (0.85 + tone * 0.4), CRASH_RATIOS), filter(ctx, 'bandpass', 7500 + tone * 3000, 0.7), bright);
+    // The wash: far more noise than a ride, fading a little faster than the metal.
+    const wash = ctx.createGain();
+    wash.gain.value = 0.6;
+    chain(noiseSource(ctx, when, length), filter(ctx, 'highpass', 6000), decayingGain(ctx, when, 1, tau * 0.7), wash, bright);
 }

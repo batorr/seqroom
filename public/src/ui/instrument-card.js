@@ -23,6 +23,7 @@ import { randomRumbleLine, dominantPitchClass, RUMBLE_DEFAULT_PITCH } from '../s
 import { randomStabLine, STAB_DEFAULT_PITCH } from '../shared/rave-stab.js';
 import { randomHooverLine, HOOVER_DEFAULT_PITCH } from '../shared/hoover.js';
 import { randomFxLine, FX_DEFAULT_LANE } from '../shared/fx.js';
+import { randomDrumHits } from '../shared/drum-kit.js';
 import { SynthTypes, DRUM_VOICES, FX_VOICES, DRUM_VOICE_PARAM_DEFS, SAMPLER_SLOT_IDS, SAMPLER_SLOT_CONFIG, SAMPLER_MAX_SAMPLE_BYTES, SAMPLER_ALLOWED_MIME_TYPES } from '../constants/instruments.js';
 import { INSTRUMENT_LIBRARY } from '../constants/instruments.js';
 import {
@@ -702,27 +703,6 @@ function emitInstrumentParams(instrumentId, params) {
     } else {
         pending.timer = setTimeout(flush, wait);
     }
-}
-
-// Random drums for acid techno: a relentless four-on-the-floor kick, claps on
-// the backbeat, open hats on the offbeat, driving 16th hats, a running ride,
-// and the odd syncopated rim or snare.
-function randomDrumHits(stepIndex) {
-    const pos = stepIndex % 16;
-    const chance = (p) => Math.random() < p;
-    const onBeat = pos % 4 === 0;
-    const offBeat = pos % 4 === 2;
-    const backbeat = pos === 4 || pos === 12;
-    const openhat = offBeat && chance(0.85);
-    return {
-        kick: onBeat,
-        snare: backbeat ? chance(0.35) : chance(pos >= 13 ? 0.15 : 0.03),
-        clap: backbeat ? chance(0.85) : chance(0.02),
-        rim: !onBeat && chance(0.12),
-        hat: !openhat && chance(0.75),
-        openhat,
-        ride: chance(pos % 2 === 0 ? 0.45 : 0.15),
-    };
 }
 
 // The pitch Fill's Clear resets a melodic step to, per instrument type.
